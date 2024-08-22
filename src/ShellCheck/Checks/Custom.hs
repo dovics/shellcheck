@@ -14,6 +14,7 @@ import ShellCheck.ASTLib
 import ShellCheck.AST
 import ShellCheck.Interface
 import ShellCheck.Data
+import ShellCheck.Regex
 
 import qualified Data.Map.Strict as Map
 import Test.QuickCheck
@@ -23,15 +24,34 @@ import Control.Monad.Writer
 import Control.Monad.State
 import Data.Maybe
 import Data.Char
-
+import qualified Data.Set as Set
+import Data.Foldable
 
 
 checker :: Parameters -> Checker
 checker params = Checker {
     perScript = \(Root root) -> do
-            tell $ concatMap (\f -> f params root) [checkNotCamelCaseVar],
+            tell $ concatMap (\f -> f params root) [checkNotCamelCaseVar, checkSetESuppressed],
     perToken = const $ return ()
   }
+
+
+checkSetESuppressed :: Parameters -> Token -> [TokenComment]
+checkSetESuppressed params t = 
+    execWriter $ doAnalysis isSetE t
+    where
+        re = mkRegex "[[:space:]]-[^-]*e"
+        setEMsg id = info id 5001 "设置 set -e 选项, 避免后续脚本在错误命令状态下继续执行"
+        isSetE t =
+            case t of
+                T_Script _ (T_Literal _ str) _ -> when (str `matches` re) $ setEMsg (getId t)
+                T_SimpleCommand {} ->
+                    when
+                    (t `isUnqualifiedCommand` "set" 
+                        && ("errexit" `elem` oversimplify t
+                            || "e" `elem` map snd (getAllFlags t)))
+                    $ setEMsg (getId t)
+                _ -> return ()
 
 checkNotCamelCaseVar :: Parameters -> p -> [TokenComment]
 checkNotCamelCaseVar params t = warning 
