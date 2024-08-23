@@ -31,10 +31,44 @@ import Data.Foldable
 checker :: Parameters -> Checker
 checker params = Checker {
     perScript = \(Root root) -> do
-            tell $ concatMap (\f -> f params root) [checkNotCamelCaseVar, checkSetESuppressed],
+            tell $ concatMap (\f -> f params root) [checkNotCamelCaseVar, checkSetESuppressed, checkCompareArgsNumber],
     perToken = const $ return ()
   }
 
+checkNotCamelCaseVar :: Parameters -> p -> [TokenComment]
+checkNotCamelCaseVar params t = 
+    execWriter . sequence $ mapMaybe warningFor allVars 
+  where
+    isLocal = any isLower
+   
+    containUnderscore = foldr ((||) . (== '_')) True
+
+    toCamelCase :: String -> String
+    toCamelCase ('_':xs) = toCamelCase' xs
+    toCamelCase (x:xs) = x : toCamelCase xs
+    toCamelCase _ = ""
+
+    toCamelCase' (x:xs) =  toUpper x : toCamelCase xs
+    toCamelCase' _ = ""
+
+    warningForLocals var place = do
+        return $ warn (getId place) 5000 $
+            "变量 " ++ var ++ " 建议使用驼峰命名, 考虑使用变量名 " ++ toCamelCase var ++ "."
+
+    warningFor (var, place) = do
+        guard $ isVariableName var
+        guard $ containUnderscore var
+        guard $ isLocal var
+        warningForLocals var place
+
+    varMap = execState (mapM tally $ variableFlow params) Map.empty
+    defaultAssigned = Map.fromList $ map (, ()) $ filter (not . null) internalVariables
+
+    tally (Reference (_, place, name)) =
+        modify (Map.insertWith (const id) name place)
+    tally _ = return ()
+
+    allVars = Map.toList $ Map.difference varMap defaultAssigned
 
 checkSetESuppressed :: Parameters -> Token -> [TokenComment]
 checkSetESuppressed params t = 
@@ -53,42 +87,20 @@ checkSetESuppressed params t =
                     $ setEMsg (getId t)
                 _ -> return ()
 
-checkNotCamelCaseVar :: Parameters -> p -> [TokenComment]
-checkNotCamelCaseVar params t = warning 
+checkCompareArgsNumber param t = do
+    execWriter $ doAnalysis isCompareArgsNumber t
   where
-    isLocal = any isLower
-   
-    containUnderscore = foldr ((||) . (== '_')) True
-
-    toCamelCase :: String -> String
-    toCamelCase ('_':xs) = toCamelCase' xs
-    toCamelCase (x:xs) = x : toCamelCase xs
-    toCamelCase _ = ""
-
-    toCamelCase' (x:xs) =  toUpper x : toCamelCase xs
-    toCamelCase' _ = ""
-
-    warningForLocals var place = do
-        return $ info (getId place) 5000 $
-            "变量 " ++ var ++ " 建议使用驼峰命名, 考虑使用变量名 " ++ toCamelCase var ++ "."
-
-    warningFor (var, place) = do
-        guard $ isVariableName var
-        guard $ containUnderscore var
-        guard $ isLocal var
-        warningForLocals var place
-
-    varMap = execState (mapM tally $ variableFlow params) Map.empty
-    defaultAssigned = Map.fromList $ map (, ()) $ filter (not . null) internalVariables
-
-    tally (Reference (_, place, name)) =
-        modify (Map.insertWith (const id) name place)
-    tally _ = return ()
-
-    allVars = Map.toList $ Map.difference varMap defaultAssigned
-
-    
-    warning = execWriter . sequence $ mapMaybe warningFor allVars
+    infoFor id = info id 5002 "通过 $# 等命令检查传递给脚本的参数数量，确保传入参数数量与预期一致"
+    check t = case t of
+        T_DollarBraced id _ (T_NormalWord _ [T_Literal _ "#"]) -> do infoFor id
+        _ -> return ()
+            
+    isCompareArgsNumber t = case t of
+        TC_Binary _ _ _ lhs _ -> case lhs of
+            T_NormalWord _ [T_DoubleQuoted _ [word]] -> check word
+            T_NormalWord _ [word] -> check word
+            _ -> return ()
+        _ -> return ()
 
 prop_CustomTestsWork = True
 
