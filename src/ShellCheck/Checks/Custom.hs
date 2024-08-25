@@ -92,7 +92,7 @@ checkCompareArgsNumber param t = do
   where
     infoFor id = info id 5002 "通过 $# 等命令检查传递给脚本的参数数量，确保传入参数数量与预期一致"
     check t = case t of
-        T_DollarBraced id _ (T_NormalWord _ [T_Literal _ "#"]) -> do infoFor id
+        T_DollarBraced id _ val | getLiteralString val == Just "#" -> do infoFor id
         _ -> return ()
             
     isCompareArgsNumber t = case t of

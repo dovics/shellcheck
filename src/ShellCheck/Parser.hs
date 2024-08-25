@@ -28,6 +28,7 @@ import ShellCheck.ASTLib hiding (runTests)
 import ShellCheck.Data
 import ShellCheck.Interface
 import ShellCheck.Prelude
+import ShellCheck.Message
 
 import Control.Applicative ((<*), (*>))
 import Control.Monad
@@ -103,7 +104,7 @@ spacing = do
         optional $ do
             x <- readComment
             when ("\\" `isSuffixOf` x) $
-                parseProblem ErrorC 1143 "This backslash is part of a comment and does not continue the line."
+                parseProblem ErrorC 1143 $ getMessage 1143 []
         return whitespace
 
 spacing1 = do
@@ -132,13 +133,13 @@ readUnicodeQuote = do
     start <- startSpan
     c <- oneOf (unicodeSingleQuotes ++ unicodeDoubleQuotes)
     id <- endSpan start
-    parseProblemAtId id WarningC 1110 "This is a unicode quote. Delete and retype it (or quote to make literal)."
+    parseProblemAtId id WarningC 1110 $ getMessage 1110 []
     return $ T_Literal id [c]
 
 carriageReturn = do
     pos <- getPosition
     char '\r'
-    parseProblemAt pos ErrorC 1017 "Literal carriage return. Run script through tr -d '\\r' ."
+    parseProblemAt pos ErrorC 1017 $ getMessage 1017 []
     return '\r'
 
 almostSpace =
@@ -148,7 +149,7 @@ almostSpace =
     ]
   where
     check c name = do
-        parseNote ErrorC 1018 $ "This is a " ++ name ++ ". Delete and retype it."
+        parseNote ErrorC 1018 $ getMessage 1018 [name]
         char c
         return ' '
 
@@ -305,7 +306,7 @@ shouldFollow file = do
       else
         if length (filter isSource context) >= 100
           then do
-            parseProblem ErrorC 1092 "Stopping at 100 'source' frames :O"
+            parseProblem ErrorC 1092 $ getMessage 1092 []
             return False
           else
             return True
@@ -467,7 +468,7 @@ readConditionContents single =
                                 s <- readVariableName
                                 spacing1
                                 when (s `elem` commonCommands) $
-                                    parseProblemAt pos WarningC 1014 "Use 'if cmd; then ..' to check exit code, or 'if [[ $(cmd) == .. ]]' to check output.")
+                                    parseProblemAt pos WarningC 1014 $ getMessage 1014 [])
 
   where
     spacingOrLf = condSpacing True
@@ -475,7 +476,7 @@ readConditionContents single =
         pos <- getPosition
         space <- allspacing
         when (required && null space) $
-            parseProblemAt pos ErrorC 1035 "You are missing a required space here."
+            parseProblemAt pos ErrorC 1035 $ getMessage 1035 ["here"]
         when (single && '\n' `elem` space) $
             parseProblemAt pos ErrorC 1080 "When breaking lines in [ ], you need \\ before the linefeed."
         return space
@@ -524,14 +525,14 @@ readConditionContents single =
         try . lookAhead $ void (oneOf "+*/%") <|> void (string "- ")
         parseProblem ErrorC 1076 $
             if single
-            then "Trying to do math? Use e.g. [ $((i/2+7)) -ge 18 ]."
-            else "Trying to do math? Use e.g. [[ $((i/2+7)) -ge 18 ]]."
+            then getMessage 1076  ["[ $((i/2+7)) -ge 18 ]."]
+            else getMessage 1076  ["[[ $((i/2+7)) -ge 18 ]]."]
 
     readCondUnaryExp = do
       op <- readCondUnaryOp
       pos <- getPosition
       liftM op readCondWord `orFail` do
-          parseProblemAt pos ErrorC 1019 "Expected this to be an argument to the unary condition."
+          parseProblemAt pos ErrorC 1019 $ getMessage 1019 []
           return "Expected an argument for the unary operator"
 
     readCondUnaryOp = try $ do
@@ -549,8 +550,8 @@ readConditionContents single =
     weirdDash = do
         pos <- getPosition
         oneOf "\x058A\x05BE\x2010\x2011\x2012\x2013\x2014\x2015\xFE63\xFF0D"
-        parseProblemAt pos ErrorC 1100
-            "This is a unicode dash. Delete and retype as ASCII minus."
+        parseProblemAt pos ErrorC 1100 $
+            getMessage 1100 []
         return '-'
 
     readCondWord = do
@@ -559,7 +560,7 @@ readConditionContents single =
         pos <- getPosition
         when (notArrayIndex x && endedWith "]" x && not (x `containsLiteral` "[")) $ do
             parseProblemAt pos ErrorC 1020 $
-                "You need a space before the " ++ (if single then "]" else "]]") ++ "."
+                getMessage 1020 [if single then "]" else "]]"]
             fail "Missing space before ]"
         when (single && endedWith ")" x) $ do
             parseProblemAt pos ErrorC 1021
@@ -594,9 +595,10 @@ readConditionContents single =
       x <- readCondWord `attempting` (do
               pos <- getPosition
               lookAhead (char '[')
-              parseProblemAt pos ErrorC 1026 $ if single
-                  then "If grouping expressions inside [..], use \\( ..\\)."
-                  else "If grouping expressions inside [[..]], use ( .. )."
+              parseProblemAt pos ErrorC 1026 $ getMessage 1026 $
+                if single
+                  then ["[..]", "\\(..\\)"]
+                  else ["[[..]]", "(..)"]
             )
       id <- endSpan start
       (do
@@ -605,7 +607,7 @@ readConditionContents single =
             op <- readCondBinaryOp
             y <- if isRegex
                     then readRegex
-                    else  readCondWord <|> (parseProblemAt pos ErrorC 1027 "Expected another argument for this operator." >> mzero)
+                    else  readCondWord <|> (parseProblemAt pos ErrorC 1027 (getMessage 1027 []) >> mzero)
             return (x `op` y)
           ) <|> ( do
             checkTrailingOp x
@@ -616,7 +618,7 @@ readConditionContents single =
         (T_Literal id str) <- getTrailingUnquotedLiteral x
         trailingOp <- find (`isSuffixOf` str) binaryTestOps
         return $ parseProblemAtId id ErrorC 1108 $
-            "You need a space before and after the " ++ trailingOp ++ " ."
+            getMessage 1108 [trailingOp]
 
     readCondGroup = do
         start <- startSpan
@@ -640,9 +642,9 @@ readConditionContents single =
 
       where
         singleWarning pos =
-            parseProblemAt pos ErrorC 1028 "In [..] you have to escape \\( \\) or preferably combine [..] expressions."
+            parseProblemAt pos ErrorC 1028 $ getMessage 1028 []
         doubleWarning pos =
-            parseProblemAt pos ErrorC 1029 "In [[..]] you shouldn't escape ( or )."
+            parseProblemAt pos ErrorC 1029 $ getMessage 1029 []
 
 
     -- Currently a bit of a hack since parsing rules are obscure
@@ -772,7 +774,7 @@ readArithmeticContents =
                 ("eq", "=="),
                 ("ne", "!=")
               ]
-            parseProblemAt pos ErrorC 1106 $ "In arithmetic contexts, use " ++ alt ++ " instead of -" ++ str
+            parseProblemAt pos ErrorC 1106 $ getMessage 1106 [alt, str]
         id <- endSpan start
         spacing
         return $ TA_Binary id "-"
@@ -958,12 +960,12 @@ readCondition = called "test expression" $ do
     pos <- getPosition
     space <- allspacing
     when (null space) $
-        parseProblemAtWithEnd opos pos ErrorC 1035 $ "You need a space after the " ++
-            if single
+        parseProblemAtWithEnd opos pos ErrorC 1035 $ 
+            getMessage 1035  ["after the " ++ if single
                 then "[ and before the ]."
-                else "[[ and before the ]]."
+                else "[[ and before the ]]."]
     when (single && '\n' `elem` space) $
-        parseProblemAt pos ErrorC 1080 "You need \\ before line feeds to break lines in [ ]."
+        parseProblemAt pos ErrorC 1080 $ getMessage 1080 []
 
     condition <- readConditionContents single <|> do
         guard . not . null $ space
@@ -974,8 +976,8 @@ readCondition = called "test expression" $ do
     cpos <- getPosition
     close <- try (string "]]") <|> string "]" <|> fail "Expected test to end here (don't wrap commands in []/[[]])"
     id <- endSpan start
-    when (open == "[[" && close /= "]]") $ parseProblemAt cpos ErrorC 1033 "Test expression was opened with double [[ but closed with single ]. Make sure they match."
-    when (open == "[" && close /= "]" ) $ parseProblemAt opos ErrorC 1034 "Test expression was opened with single [ but closed with double ]]. Make sure they match."
+    when (open == "[[" && close /= "]]") $ parseProblemAt cpos ErrorC 1033 $ getMessage 1033 []
+    when (open == "[" && close /= "]" ) $ parseProblemAt opos ErrorC 1034 $ getMessage 1034 []
     spacing
     return $ T_Condition id typ condition
 
@@ -1005,7 +1007,7 @@ readAnnotationWithoutPrefix sandboxed = do
     values <- many1 readKey
     optional readAnyComment
     void linefeed <|> eof <|> do
-        parseNote ErrorC 1125 "Invalid key=value pair? Ignoring the rest of this directive starting here."
+        parseNote ErrorC 1125 $ getMessage 1125 []
         many (noneOf "\n")
         void linefeed <|> eof
     many linewhitespace
@@ -1054,8 +1056,7 @@ readAnnotationWithoutPrefix sandboxed = do
                 pos <- getPosition
                 shell <- quoted (many1 anyChar) <|> (many1 $ noneOf " \n")
                 when (isNothing $ shellForExecutable shell) $
-                    parseNoteAt pos ErrorC 1103
-                        "This shell type is unknown. Use e.g. sh or bash."
+                    parseNoteAt pos ErrorC 1103 $ getMessage 1103 []
                 return [ShellOverride shell]
 
             "extended-analysis" -> do
@@ -1075,16 +1076,16 @@ readAnnotationWithoutPrefix sandboxed = do
                     "true" ->
                         if sandboxed
                         then do
-                            parseNoteAt pos ErrorC 1144 "external-sources can only be enabled in .shellcheckrc, not in individual files."
+                            parseNoteAt pos ErrorC 1144 $ getMessage 1144 []
                             return []
                         else return [ExternalSources True]
                     "false" -> return [ExternalSources False]
                     _ -> do
-                        parseNoteAt pos ErrorC 1145 "Unknown external-sources value. Expected true/false."
+                        parseNoteAt pos ErrorC 1145 $ getMessage 1145 []
                         return []
 
             _ -> do
-                parseNoteAt keyPos WarningC 1107 "This directive is unknown. It will be ignored."
+                parseNoteAt keyPos WarningC 1107 $ getMessage 1107 []
                 anyChar `reluctantlyTill` whitespace
                 return []
 
@@ -1147,7 +1148,7 @@ readIndexSpan = do
 
 checkPossibleTermination pos [T_Literal _ x] terminators =
     when (x `elem` terminators) $
-        parseProblemAt pos WarningC 1010 $ "Use semicolon or linefeed before '" ++ x ++ "' (or quote to make it literal)."
+        parseProblemAt pos WarningC 1010 $ getMessage 1010 [x]
 checkPossibleTermination _ _ _ = return ()
 
 readNormalWordPart end = do
@@ -1170,7 +1171,7 @@ readNormalWordPart end = do
         return () `attempting` do
             pos <- getPosition
             lookAhead $ char '('
-            parseProblemAt pos ErrorC 1036 "'(' is invalid here. Did you forget to escape it?"
+            parseProblemAt pos ErrorC 1036 $ getMessage 1036 []
 
     readLiteralCurlyBraces = do
         start <- startSpan
@@ -1183,7 +1184,7 @@ readNormalWordPart end = do
         pos <- getPosition
         c <- oneOf "{}"
         parseProblemAt pos WarningC 1083 $
-            "This " ++ [c] ++ " is literal. Check expression (missing ;/\\n?) or quote it."
+            getMessage 1083 [[c]]
         return [c]
 
 
@@ -1250,8 +1251,8 @@ readSingleQuoted = called "single quoted string" $ do
         c <- try . lookAhead $ suspectCharAfterQuotes <|> oneOf "'"
         if not (null string) && isAlpha c && isAlpha (last string)
           then
-            parseProblemAt endPos WarningC 1011
-                "This apostrophe terminated the single quoted string!"
+            parseProblemAt endPos WarningC 1011 $
+                getMessage 1011 []
           else
             when ('\n' `elem` string && not ("\n" `isPrefixOf` string)) $
                 suggestForgotClosingQuote startPos endPos "single quoted string"
@@ -1273,8 +1274,8 @@ readSingleQuotedPart =
     readUnicodeQuote = do
         pos <- getPosition
         x <- oneOf unicodeSingleQuotes
-        parseProblemAt pos WarningC 1112
-            "This is a unicode quote. Delete and retype it (or ignore/doublequote for literal)."
+        parseProblemAt pos WarningC 1112 $
+            getMessage 1112 []
         return [x]
 
 
@@ -1320,8 +1321,8 @@ readBackTicked quoted = called "backtick expansion" $ do
       void (char '`') <|> do
          pos <- getPosition
          char '´'
-         parseProblemAt pos ErrorC 1077
-            "For command expansion, the tick should slant left (` vs ´). Use $(..) instead."
+         parseProblemAt pos ErrorC 1077 $
+            getMessage 1077 []
 
 -- Run a parser on a new input, such as for `..` or here documents.
 subParse pos parser input = do
@@ -1381,9 +1382,9 @@ readDoubleQuoted = called "double quoted string" $ do
 
 suggestForgotClosingQuote startPos endPos name = do
     parseProblemAt startPos WarningC 1078 $
-        "Did you forget to close this " ++ name ++ "?"
-    parseProblemAt endPos InfoC 1079
-        "This is actually an end quote, but due to next char it looks suspect."
+        getMessage 1078 [name]
+    parseProblemAt endPos InfoC 1079 $
+        getMessage 1079 []
 
 doubleQuotedPart = readDoubleLiteral <|> readDoubleQuotedDollar <|> readQuotedBackTicked <|> readUnicodeQuote
   where
@@ -1392,8 +1393,8 @@ doubleQuotedPart = readDoubleLiteral <|> readDoubleQuotedDollar <|> readQuotedBa
         start <- startSpan
         c <- oneOf unicodeDoubleQuotes
         id <- endSpan start
-        parseProblemAt pos WarningC 1111
-            "This is a unicode quote. Delete and retype it (or ignore/singlequote for literal)."
+        parseProblemAt pos WarningC 1111 $
+            getMessage 1111 []
         return $ T_Literal id [c]
 
 readDoubleLiteral = do
@@ -1477,8 +1478,8 @@ readNormalEscaped = called "escaped char" $ do
         do
             next <- anyChar
             case escapedChar next of
-                Just name -> parseNoteAt pos WarningC 1012 $ "\\" ++ [next] ++ " is just literal '" ++ [next] ++ "' here. For " ++ name ++ ", use " ++ alternative next ++ " instead."
-                Nothing -> parseNoteAt pos InfoC 1001 $ "This \\" ++ [next] ++ " will be a regular '" ++ [next] ++ "' in this context."
+                Just name -> parseNoteAt pos WarningC 1012 $ getMessage 1012 [[next], name, alternative next]
+                Nothing -> parseNoteAt pos InfoC 1001 $ getMessage 1001 [[next]]
             return [next]
   where
     alternative 'n' = "a quoted, literal line feed"
@@ -1491,7 +1492,7 @@ readNormalEscaped = called "escaped char" $ do
     checkTrailingSpaces pos = lookAhead . try $ do
         many linewhitespace
         void linefeed <|> eof
-        parseProblemAt pos ErrorC 1101 "Delete trailing spaces after \\ to break line (or use quotes for literal space)."
+        parseProblemAt pos ErrorC 1101 $ getMessage 1101 []
 
 
 prop_readExtglob1 = isOk readExtglob "!(*.mp3)"
@@ -1538,7 +1539,7 @@ readSingleEscaped = do
     x <- lookAhead anyChar
 
     case x of
-        '\'' -> parseProblemAt pos InfoC 1003 "Want to escape a single quote? echo 'This is how it'\\''s done'.";
+        '\'' -> parseProblemAt pos InfoC 1003 $ getMessage 1003 [];
         _ -> return ()
 
     return [s]
@@ -1633,7 +1634,7 @@ readDollarExpression = do
 readDollarExp = arithmetic <|> readDollarExpansion <|> readDollarBracket <|> readDollarBraceCommandExpansion <|> readDollarBraced <|> readDollarVariable
   where
     arithmetic = readAmbiguous "$((" readDollarArithmetic readDollarExpansion (\pos ->
-        parseNoteAt pos ErrorC 1102 "Shells disambiguate $(( differently or not at all. For $(command substitution), add space after $( . For $((arithmetics)), fix parsing errors.")
+        parseNoteAt pos ErrorC 1102 $ getMessage 1102 [])
 
 prop_readDollarSingleQuote = isOk readDollarSingleQuote "$'foo\\\'lol'"
 readDollarSingleQuote = called "$'..' expression" $ do
@@ -1755,7 +1756,7 @@ readDollarVariable = do
         value <- singleCharred digit
         return value `attempting` do
             lookAhead digit
-            parseNoteAt pos ErrorC 1037 "Braces are required for positionals over 9, e.g. ${10}."
+            parseNoteAt pos ErrorC 1037 $ getMessage 1037 []
 
     let special = singleCharred specialVariable
 
@@ -1764,7 +1765,7 @@ readDollarVariable = do
         id <- endSpan start
         return (T_DollarBraced id False value) `attempting` do
             lookAhead $ char '['
-            parseNoteAt pos ErrorC 1087 "Use braces when expanding arrays, e.g. ${array[idx]} (or ${var}[.. to quiet)."
+            parseNoteAt pos ErrorC 1087 $ getMessage 1087 []
 
     try $ char '$' >> (positional <|> special <|> regular)
 
@@ -1795,8 +1796,8 @@ readDollarLonely quoted = do
     when quoted $ do
         isHack <- quoteForEscape
         when isHack $
-            parseProblemAtId id StyleC 1135
-                "Prefer escape over ending quote to make $ literal. Instead of \"It costs $\"5, use \"It costs \\$5\"."
+            parseProblemAtId id StyleC 1135 $
+                getMessage 1135 []
     return $ T_Literal id "$"
   where
     quoteForEscape = option False $ try . lookAhead $ do
@@ -1838,8 +1839,7 @@ readHereDoc = called "here document" $ do
     sp <- spacing
     optional $ do
         try . lookAhead $ char '('
-        let message = "Shells are space sensitive. Use '< <(cmd)', not '<<" ++ sp ++ "(cmd)'."
-        parseProblemAt pos ErrorC 1038 message
+        parseProblemAt pos ErrorC 1038 $ getMessage 1038 [sp]
     start <- startSpan
     (quoted, endToken) <- readToken
     hid <- endSpan start
@@ -1923,19 +1923,19 @@ readPendingHereDocs = do
                 -- This may be intended as an end token. Debug why it isn't.
                 if
                     | trailerStart == ')' -> do
-                        ppt 1119 $ "Add a linefeed between end token and terminating ')'."
+                        ppt 1119 $ getMessage 1119 []
                         foundCause
                     | trailerStart == '#' -> do
-                        ppt 1120 "No comments allowed after here-doc token. Comment the next line instead."
+                        ppt 1120 $ getMessage 1120 []
                         foundCause
                     | trailerStart `elem` ";>|&" -> do
-                        ppt 1121 "Add ;/& terminators (and other syntax) on the line with the <<, not here."
+                        ppt 1121 $ getMessage 1121 []
                         foundCause
                     | hasTrailingSpace && hasTrailer -> do
-                        ppt 1122 "Nothing allowed after end token. To continue a command, put it on the line with the <<."
+                        ppt 1122 $ getMessage 1122 []
                         foundCause
                     | leaderIsOk && hasTrailingSpace && not hasTrailer -> do
-                        parseProblemAt trailingSpacePos ErrorC 1118 "Delete whitespace after the here-doc end token."
+                        parseProblemAt trailingSpacePos ErrorC 1118 $ getMessage 1118 []
                         -- Parse as if it's the actual end token. Will koala_man regret this once again?
                         return (True, True)
                     | not hasTrailingSpace && hasTrailer ->
@@ -1946,10 +1946,10 @@ readPendingHereDocs = do
 
                     -- The following cases assume no trailing text:
                     | dashed == Undashed && (not $ null leadingSpace) -> do
-                        parseProblemAt leadingSpacePos ErrorC 1039 "Remove indentation before end token (or use <<- and indent with tabs)."
+                        parseProblemAt leadingSpacePos ErrorC 1039 $ getMessage 1039 []
                         foundCause
                     | dashed == Dashed && not leadingSpacesAreTabs -> do
-                        parseProblemAt leadingSpacePos ErrorC 1040 "When using <<-, you can only indent with tabs."
+                        parseProblemAt leadingSpacePos ErrorC 1040 $ getMessage 1040 []
                         foundCause
                     | True -> skipLine
 
@@ -1978,12 +1978,12 @@ readPendingHereDocs = do
             let lookAt line = when (endToken `isInfixOf` line) $
                       parseProblemAtId tokenId ErrorC 1042 ("Close matches include '" ++ (e4m line) ++ "' (!= '" ++ (e4m endToken) ++ "').")
             in do
-                  parseProblemAtId tokenId ErrorC 1041 ("Found '" ++ (e4m endToken) ++ "' further down, but not on a separate line.")
+                  parseProblemAtId tokenId ErrorC 1041 $ getMessage 1041 [e4m endToken]
                   mapM_ lookAt (lines doc)
         | map toLower endToken `isInfixOf` map toLower doc =
-            parseProblemAtId tokenId ErrorC 1043 ("Found " ++ (e4m endToken) ++ " further down, but with wrong casing.")
+            parseProblemAtId tokenId ErrorC 1043 $ getMessage 1043 [e4m endToken]
         | otherwise =
-            parseProblemAtId tokenId ErrorC 1044 ("Couldn't find end token `" ++ (e4m endToken) ++ "' in the here document.")
+            parseProblemAtId tokenId ErrorC 1044 $ getMessage 1044 [e4m endToken]
 
 
 readFilename = readNormalWord
@@ -2056,8 +2056,8 @@ readNewlineList =
                 pos <- getPosition
                 try $ lookAhead (oneOf "|&") --  See if the next thing could be |, || or &&
                 notFollowedBy2 (string "&>") --  Except &> or &>> which is valid
-                parseProblemAt pos ErrorC 1133
-                    "Unexpected start of line. If breaking lines, |/||/&& should be at the end of the previous one."
+                parseProblemAt pos ErrorC 1133 $
+                    getMessage 1133 []
 readLineBreak = optional readNewlineList
 
 prop_readSeparator1 = isWarning readScript "a &; b"
@@ -2076,11 +2076,11 @@ readSeparatorOp = do
                         do
                             s <- lookAhead . choice . map (try . string) $
                                 ["amp;", "gt;", "lt;"]
-                            parseProblemAt pos ErrorC 1109 "This is an unquoted HTML entity. Replace with corresponding character.",
+                            parseProblemAt pos ErrorC 1109 $ getMessage 1109 [],
 
                         do
                             try . lookAhead $ variableStart
-                            parseProblemAt pos WarningC 1132 "This & terminates the command. Escape it or add space after & to silence."
+                            parseProblemAt pos WarningC 1132 $ getMessage 1132 []
                       ]
 
                     spacing
@@ -2088,7 +2088,7 @@ readSeparatorOp = do
                     char ';'
                     -- In case statements we might have foo & ;;
                     notFollowedBy2 $ char ';'
-                    parseProblemAt pos ErrorC 1045 "It's not 'foo &; bar', just 'foo & bar'."
+                    parseProblemAt pos ErrorC 1045 $ getMessage 1045 []
                     return '&'
             ) <|> char ';' <|> char '&'
     end <- getPosition
@@ -2175,7 +2175,7 @@ readSimpleCommand = called "simple command" $ do
             (T_NormalWord _ (T_Literal _ str:_)) -> do
                 let cmdString = map toLower $ takeWhile isAlpha str
                 when (cmdString `elem` ["elsif", "elseif"]) $
-                    parseProblemAtId (getId cmd) ErrorC 1131 "Use 'elif' to start another branch."
+                    parseProblemAtId (getId cmd) ErrorC 1131 $ getMessage 1131 []
             _ -> return ()
 
     syntaxCheckTrap cmd =
@@ -2190,7 +2190,7 @@ readSimpleCommand = called "simple command" $ do
             subParse start (tryWithErrors (readCompoundListOrEmpty >> verifyEof) <|> return ()) str
 
     commentWarning id =
-        parseProblemAtId id ErrorC 1127 "Was this intended as a comment? Use # in sh."
+        parseProblemAtId id ErrorC 1127 $ getMessage 1127 []
 
     makeSimpleCommand id1 id2 prefix cmd suffix =
         let
@@ -2221,8 +2221,7 @@ readSource t@(T_Redirecting _ _ (T_SimpleCommand cmdId _ (cmd:file':rest'))) = d
         return name
     case literalFile of
         Nothing -> do
-            parseNoteAtId (getId file) WarningC 1090
-                "ShellCheck can't follow non-constant source. Use a directive to specify location."
+            parseNoteAtId (getId file) WarningC 1090 $ getMessage 1090 []
             return t
         Just filename -> do
             proceed <- shouldFollow filename
@@ -2248,7 +2247,7 @@ readSource t@(T_Redirecting _ _ (T_SimpleCommand cmdId _ (cmd:file':rest'))) = d
                 case input of
                     Left err -> do
                         parseNoteAtId (getId file) InfoC 1091 $
-                            "Not following: " ++ err
+                            getMessage 1091 [err]
                         return t
                     Right script -> do
                         id1 <- getNewIdFor cmdId
@@ -2259,8 +2258,8 @@ readSource t@(T_Redirecting _ _ (T_SimpleCommand cmdId _ (cmd:file':rest'))) = d
                             return $ T_SourceCommand id1 t (T_Include id2 src)
 
                         let failed = do
-                            parseNoteAtId (getId file) WarningC 1094
-                                "Parsing of sourced file failed. Ignoring it."
+                            parseNoteAtId (getId file) WarningC 1094 $
+                                getMessage 1094 []
                             return t
 
                         included <|> failed
@@ -2331,7 +2330,7 @@ readAndOr = do
 
     unless (null annotations) $ optional $ do
         try . lookAhead $ readKeyword
-        parseProblemAt apos ErrorC 1123 "ShellCheck directives are only valid in front of complete compound commands, like 'if', not e.g. individual 'elif' branches."
+        parseProblemAt apos ErrorC 1123 $ getMessage 1123 []
 
     andOr <- withAnnotations annotations $
         chainl1 readPipeline $ do
@@ -2423,7 +2422,7 @@ readCmdWord = do
 -- comments, so you end up with a parse failure instead.
 skipAnnotationAndWarn = optional $ do
         try . lookAhead $ readAnnotationPrefix
-        parseProblem ErrorC 1126 "Place shellcheck directives before commands, not after."
+        parseProblem ErrorC 1126 $ getMessage 1126 []
         readAnyComment
 
 prop_readIfClause = isOk readIfClause "if false; then foo; elif true; then stuff; more stuff; else cows; fi"
@@ -2440,8 +2439,8 @@ readIfClause = called "if expression" $ do
     elses <- option [] readElsePart
 
     g_Fi `orFail` do
-        parseProblemAt pos ErrorC 1046 "Couldn't find 'fi' for this 'if'."
-        parseProblem ErrorC 1047 "Expected 'fi' matching previously mentioned 'if'."
+        parseProblemAt pos ErrorC 1046 $ getMessage 1045 []
+        parseProblem ErrorC 1047 $ getMessage 1047 []
         return "Expected 'fi'"
     id <- endSpan start
 
@@ -2452,7 +2451,7 @@ verifyNotEmptyIf s =
     optional (do
                 emptyPos <- getPosition
                 try . lookAhead $ (g_Fi <|> g_Elif <|> g_Else)
-                parseProblemAt emptyPos ErrorC 1048 $ "Can't have empty " ++ s ++ " clauses (use 'true' as a no-op).")
+                parseProblemAt emptyPos ErrorC 1048 $ getMessage 1048 [s])
 readIfPart = do
     pos <- getPosition
     g_If
@@ -2460,14 +2459,14 @@ readIfPart = do
     condition <- readTerm
 
     ifNextToken (g_Fi <|> g_Elif <|> g_Else) $
-        parseProblemAt pos ErrorC 1049 "Did you forget the 'then' for this 'if'?"
+        parseProblemAt pos ErrorC 1049 $ getMessage 1049 ["if"]
 
     called "then clause" $ do
         g_Then `orFail` do
-            parseProblem ErrorC 1050 "Expected 'then'."
+            parseProblem ErrorC 1050 $ getMessage 1050 []
             return "Expected 'then'"
 
-        acceptButWarn g_Semi ErrorC 1051 "Semicolons directly after 'then' are not allowed. Just remove it."
+        acceptButWarn g_Semi ErrorC 1051 $ getMessage 1051 []
         allspacing
         verifyNotEmptyIf "then"
 
@@ -2480,10 +2479,10 @@ readElifPart = called "elif clause" $ do
     allspacing
     condition <- readTerm
     ifNextToken (g_Fi <|> g_Elif <|> g_Else) $
-        parseProblemAt pos ErrorC 1049 "Did you forget the 'then' for this 'elif'?"
+        parseProblemAt pos ErrorC 1049 $ getMessage 1049 ["elif"]
 
     g_Then
-    acceptButWarn g_Semi ErrorC 1052 "Semicolons directly after 'then' are not allowed. Just remove it."
+    acceptButWarn g_Semi ErrorC 1052 $ getMessage 1052 []
     allspacing
     verifyNotEmptyIf "then"
     action <- readTerm
@@ -2494,9 +2493,9 @@ readElsePart = called "else clause" $ do
     g_Else
     optional $ do
         try . lookAhead $ g_If
-        parseProblemAt pos ErrorC 1075 "Use 'elif' instead of 'else if' (or put 'if' on new line if nesting)."
+        parseProblemAt pos ErrorC 1075 $ getMessage 1075 []
 
-    acceptButWarn g_Semi ErrorC 1053 "Semicolons directly after 'else' are not allowed. Just remove it."
+    acceptButWarn g_Semi ErrorC 1053 $ getMessage 1053 []
     allspacing
     verifyNotEmptyIf "else"
     readTerm
@@ -2526,14 +2525,14 @@ readBraceGroup = called "brace group" $ do
     char '{'
     void allspacingOrFail <|> optional (do
         lookAhead $ noneOf "(" -- {( is legal
-        parseProblem ErrorC 1054 "You need a space after the '{'.")
+        parseProblem ErrorC 1054 $ getMessage 1054 [])
     optional $ do
         pos <- getPosition
         lookAhead $ char '}'
-        parseProblemAt pos ErrorC 1055 "You need at least one command here. Use 'true;' as a no-op."
+        parseProblemAt pos ErrorC 1055 $ getMessage 1055 []
     list <- readTerm
     char '}' <|> do
-        parseProblem ErrorC 1056 "Expected a '}'. If you have one, try a ; or \\n in front of it."
+        parseProblem ErrorC 1056 $ getMessage 1056 []
         fail "Missing '}'"
     id <- endSpan start
     spacing
@@ -2584,29 +2583,30 @@ readUntilClause = called "until loop" $ do
 readDoGroup kwId = do
     optional (do
                 try . lookAhead $ g_Done
-                parseProblemAtId kwId ErrorC 1057 "Did you forget the 'do' for this loop?")
+                parseProblemAtId kwId ErrorC 1057 $ getMessage 1057 [])
 
     doKw <- g_Do `orFail` do
-        parseProblem ErrorC 1058 "Expected 'do'."
+        parseProblem ErrorC 1058 $ getMessage 1058 []
         return "Expected 'do'"
 
-    acceptButWarn g_Semi ErrorC 1059 "Semicolon is not allowed directly after 'do'. You can just delete it."
+    acceptButWarn g_Semi ErrorC 1059 $ getMessage 1059 []
     allspacing
 
     optional (do
                 try . lookAhead $ g_Done
-                parseProblemAtId (getId doKw) ErrorC 1060 "Can't have empty do clauses (use 'true' as a no-op).")
+                parseProblemAtId (getId doKw) ErrorC 1060 $ getMessage 1060 [])
 
     commands <- readCompoundList
     g_Done `orFail` do
-            parseProblemAtId (getId doKw) ErrorC 1061 "Couldn't find 'done' for this 'do'."
+            parseProblemAtId (getId doKw) ErrorC 1061 $ getMessage 1060 []
             parseProblem ErrorC 1062 "Expected 'done' matching previously mentioned 'do'."
             return "Expected 'done'"
 
     optional . lookAhead $ do
         pos <- getPosition
         try $ string "<("
-        parseProblemAt pos ErrorC 1142 "Use 'done < <(cmd)' to redirect from process substitution (currently missing one '<')."
+        parseProblemAt pos ErrorC 1142 $
+            getMessage 1142 []
     return commands
 
 
@@ -2629,38 +2629,37 @@ readForClause = called "for loop" $ do
     readArithmetic id <|> readRegular id
   where
     readArithmetic id = called "arithmetic for condition" $ do
-        readArithmeticDelimiter '(' "Missing second '(' to start arithmetic for ((;;)) loop"
+        readArithmeticDelimiter '(' 
         x <- readArithmeticContents
         char ';' >> spacing
         y <- readArithmeticContents
         char ';' >> spacing
         z <- readArithmeticContents
         spacing
-        readArithmeticDelimiter ')' "Missing second ')' to terminate 'for ((;;))' loop condition"
+        readArithmeticDelimiter ')'
         spacing
         optional $ readSequentialSep >> spacing
         group <- readBraced <|> readDoGroup id
         return $ T_ForArithmetic id x y z group
 
     -- For c='(' read "((" and be lenient about spaces
-    readArithmeticDelimiter c msg = do
+    readArithmeticDelimiter c = do
         char c
         startPos <- getPosition
         sp <- spacing
         endPos <- getPosition
         char c <|> do
-            parseProblemAt startPos ErrorC 1137 msg
+            parseProblemAt startPos ErrorC 1137 $ getMessage 1137 [[c]]
             fail ""
         unless (null sp) $
-            parseProblemAtWithEnd startPos endPos ErrorC 1138 $ "Remove spaces between " ++ [c,c] ++ " in arithmetic for loop."
+            parseProblemAtWithEnd startPos endPos ErrorC 1138 $ getMessage 1138 [[c]]
 
     readBraced = do
         (T_BraceGroup _ list) <- readBraceGroup
         return list
 
     readRegular id = do
-        acceptButWarn (char '$') ErrorC 1086
-            "Don't use $ on the iterator name in for loops."
+        acceptButWarn (char '$') ErrorC 1086 $ getMessage 1086 []
         name <- readVariableName `thenSkip` allspacing
         values <- readInClause <|> (optional readSequentialSep >> return [])
         group <- readBraced <|> readDoGroup id
@@ -2688,7 +2687,7 @@ readInClause = do
 
     do {
         lookAhead g_Do;
-        parseNote ErrorC 1063 "You need a line feed or semicolon before the 'do'.";
+        parseNote ErrorC 1063 $ getMessage 1063 [];
     } <|> do {
         optional g_Semi;
         void allspacing;
@@ -2720,7 +2719,7 @@ readCaseItem = called "case item" $ do
     notFollowedBy2 g_Esac
     optional $ do
         try . lookAhead $ readAnnotationPrefix
-        parseProblem ErrorC 1124 "ShellCheck directives are only valid in front of complete commands like 'case' statements, not individual case branches."
+        parseProblem ErrorC 1124 $ getMessage 1124 []
     optional g_Lparen
     spacing
     pattern' <- readPattern
@@ -2733,8 +2732,7 @@ readCaseItem = called "case item" $ do
     separator <- readCaseSeparator `attempting` do
         pos <- getPosition
         lookAhead g_Rparen
-        parseProblemAt pos ErrorC 1074
-            "Did you forget the ;; after the previous case item?"
+        parseProblemAt pos ErrorC 1074 $ getMessage 1074 []
     readLineBreak
     return (separator, pattern', list)
 
@@ -2761,7 +2759,7 @@ readFunctionDefinition = called "function" $ do
     start <- startSpan
     functionSignature <- try readFunctionSignature
     allspacing
-    void (lookAhead $ oneOf "{(") <|> parseProblem ErrorC 1064 "Expected a { to open the function definition."
+    void (lookAhead $ oneOf "{(") <|> parseProblem ErrorC 1064 (getMessage 1064 [])
     group <- readBraceGroup <|> readSubshell
     id <- endSpan start
     return $ functionSignature id group
@@ -2779,7 +2777,7 @@ readFunctionDefinition = called "function" $ do
             hasParens <- wasIncluded readParens
             when (not hasParens && null spaces) $
                 acceptButWarn (lookAhead (oneOf "{("))
-                    ErrorC 1095 "You need a space or linefeed between the function name and body."
+                    ErrorC 1095 $ getMessage 1095 []
             return $ \id -> T_Function id (FunctionKeyword True) (FunctionParentheses hasParens) name
 
         readWithoutFunction = try $ do
@@ -2793,7 +2791,7 @@ readFunctionDefinition = called "function" $ do
             g_Lparen
             spacing
             g_Rparen <|> do
-                parseProblem ErrorC 1065 "Trying to declare parameters? Don't. Use () and refer to params as $1, $2.."
+                parseProblem ErrorC 1065 $ getMessage 1065 []
                 many $ noneOf "\n){"
                 g_Rparen
             return ()
@@ -2837,7 +2835,7 @@ readConditionCommand = do
         c <- choice $ try . string <$> ["-o", "-a", "or", "and"]
         posEnd <- getPosition
         parseProblemAtWithEnd pos posEnd ErrorC 1139 $
-            "Use " ++ alt c ++ " instead of '" ++ c ++ "' between test commands."
+            getMessage 1139 [alt c, c]
 
     -- If the next word is a keyword, readNormalWord will trigger a warning
     hasKeyword <- isFollowedBy readKeyword
@@ -2846,7 +2844,7 @@ readConditionCommand = do
     when (hasWord && not (hasKeyword || hasDashAo)) $ do
         -- We have other words following, and no error has been emitted.
         posEnd <- getPosition
-        parseProblemAtWithEnd pos posEnd ErrorC 1140 "Unexpected parameters after condition. Missing &&/||, or bad expression?"
+        parseProblemAtWithEnd pos posEnd ErrorC 1140 $ getMessage 1140 []
 
     return $ T_Redirecting id redirs cmd
   where
@@ -2861,7 +2859,7 @@ readCompoundCommand = do
     cmd <- choice [
         readBraceGroup,
         readAmbiguous "((" readArithmeticExpression readSubshell (\pos ->
-            parseNoteAt pos ErrorC 1105 "Shells disambiguate (( differently or not at all. For subshell, add spaces around ( . For ((, fix parsing errors."),
+            parseNoteAt pos ErrorC 1105 $ getMessage 1105 []),
         readSubshell,
         readWhileClause,
         readUntilClause,
@@ -2879,7 +2877,7 @@ readCompoundCommand = do
         pos <- getPosition
         many1 readNormalWord
         posEnd <- getPosition
-        parseProblemAtWithEnd pos posEnd ErrorC 1141 "Unexpected tokens after compound command. Bad redirection or missing ;/&&/||/|?"
+        parseProblemAtWithEnd pos posEnd ErrorC 1141 $ getMessage 1141 []
     return $ T_Redirecting id redirs cmd
 
 
@@ -2931,7 +2929,7 @@ readEvalSuffix = many1 (readIoRedirect <|> readCmdWord <|> evalFallback)
     evalFallback = do
         pos <- getPosition
         lookAhead $ char '('
-        parseProblemAt pos WarningC 1098 "Quote/escape special characters when using eval, e.g. eval \"a=(b)\"."
+        parseProblemAt pos WarningC 1098 $ getMessage 1098 []
         fail "Unexpected parentheses. Make sure to quote when eval'ing as shell parsers differ."
 
 -- Get whatever a parser would parse as a string
@@ -2988,7 +2986,7 @@ readAssignmentWordExt lenient = called "variable assignment" $ do
             when hasParen $
                 sequence_ $ do
                     (l, r) <- leadingDollarPos
-                    return $ parseProblemAtWithEnd l r ErrorC 1066 "Don't use $ on the left side of assignments."
+                    return $ parseProblemAtWithEnd l r ErrorC 1066 $ getMessage 1066 []
 
             -- Fail so that this is not parsed as an assignment.
             fail ""
@@ -3004,13 +3002,13 @@ readAssignmentWordExt lenient = called "variable assignment" $ do
       then do
         when (variable /= "IFS" && hasRightSpace && not isEndOfCommand) $ do
             parseProblemAtWithEnd rightPosStart rightPosEnd WarningC 1007
-                "Remove space after = if trying to assign a value (for empty string, use var='' ... )."
+                $ getMessage 1007 []
         value <- readEmptyLiteral
         return $ T_Assignment id op variable indices value
       else do
         optional $ do
             lookAhead $ char '='
-            parseProblem ErrorC 1097 "Unexpected ==. For assignment, use =. For comparison, use [/[[. Or quote for literal string."
+            parseProblem ErrorC 1097 $ getMessage 1097 []
 
         value <- readArray <|> readNormalWord
         spacing
@@ -3045,7 +3043,8 @@ readArray = called "array assignment" $ do
     char '('
     optional $ do
         lookAhead $ char '('
-        parseProblemAt opening ErrorC 1116 "Missing $ on a $((..)) expression? (or use ( ( for arrays)."
+        parseProblemAt opening ErrorC 1116 $
+            getMessage 116 []
     allspacing
     words <- readElement `reluctantlyTill` char ')'
     char ')' <|> fail "Expected ) to close array assignment"
@@ -3092,7 +3091,7 @@ tryParseWordToken keyword t = try $ do
 
     optional $ do
         c <- try . lookAhead $ anyChar
-        let warning code = parseProblem ErrorC code $ "You need a space before the " ++ [c] ++ "."
+        let warning code = parseProblem ErrorC code $ getMessage code []
         case c of
             '[' -> warning 1069
             '#' -> warning 1099
@@ -3103,7 +3102,7 @@ tryParseWordToken keyword t = try $ do
     lookAhead keywordSeparator
     when (str /= keyword) $ do
         parseProblemAt pos ErrorC 1081 $
-            "Scripts are case sensitive. Use '" ++ keyword ++ "', not '" ++ str ++ "' (or quote if literal)."
+            getMessage 1081 []
         fail ""
     return $ t id
 
@@ -3210,25 +3209,25 @@ readShebang = do
         middleSpaces <- skipSpaces
         char '!'
         when startSpaces $
-            parseProblemAt startPos ErrorC 1114
-                "Remove leading spaces before the shebang."
+            parseProblemAt startPos ErrorC 1114 $
+                getMessage 1114 []
         when middleSpaces $
-            parseProblemAt middlePos ErrorC 1115
-                "Remove spaces between # and ! in the shebang."
+            parseProblemAt middlePos ErrorC 1115 $
+                getMessage 1115 []
 
     readMissingHash = do
         pos <- getPosition
         char '!'
         ensurePathAhead
-        parseProblemAt pos ErrorC 1104
-            "Use #!, not just !, for the shebang."
+        parseProblemAt pos ErrorC 1104 $
+            getMessage 1104 []
 
     readMissingBang = do
         char '#'
         pos <- getPosition
         ensurePathAhead
-        parseProblemAt pos ErrorC 1113
-            "Use #!, not just #, for the shebang."
+        parseProblemAt pos ErrorC 1113 $
+            getMessage 1113 []
 
     ensurePathAhead = lookAhead $ do
         many linewhitespace
@@ -3238,7 +3237,7 @@ readShebang = do
         many1 headerLine
         pos <- getPosition
         anyShebang <*
-            parseProblemAt pos ErrorC 1128 "The shebang must be on the first line. Delete blanks and move comments."
+            parseProblemAt pos ErrorC 1128 (getMessage 1128 [])
 
     headerLine = do
         notFollowedBy2 anyShebang
@@ -3248,12 +3247,12 @@ readShebang = do
 
 verifyEof = eof <|> choice [
         ifParsable g_Lparen $
-            parseProblem ErrorC 1088 "Parsing stopped here. Invalid use of parentheses?",
+            parseProblem ErrorC 1088 (getMessage 1088 []),
 
         ifParsable readKeyword $
-            parseProblem ErrorC 1089 "Parsing stopped here. Is this keyword correctly matched up?",
+            parseProblem ErrorC 1089 (getMessage 1089 []),
 
-        parseProblem ErrorC 1070 "Parsing stopped here. Mismatched keywords or invalid parentheses?"
+        parseProblem ErrorC 1070 $ getMessage 1070 []
     ]
   where
     ifParsable p action = do
@@ -3280,7 +3279,7 @@ readConfigFile filename = do
                 return result
 
             Left err -> do
-                parseProblem ErrorC 1134 $ errorFor filename err
+                parseProblem ErrorC 1134 $ getMessage 1134 [errorFor filename err]
                 return []
 
     errorFor filename err =
@@ -3331,8 +3330,8 @@ readScriptFile sourced = do
         -- Similarly put the filewide annotations on the stack to allow earlier suppression
         withAnnotations fileAnnotations $ do
             when (hasBom) $
-                parseProblemAt pos ErrorC 1082
-                    "This file has a UTF-8 BOM. Remove it with: LC_CTYPE=C sed '1s/^...//' < yourscript ."
+                parseProblemAt pos ErrorC 1082 $
+                    getMessage 1082 []
             let annotations = fileAnnotations ++ rcAnnotations
             annotationId <- endSpan annotationStart
             let shellAnnotationSpecified =
@@ -3361,8 +3360,8 @@ readScriptFile sourced = do
     verifyShebang pos s = do
         case isValidShell s of
             Just True -> return ()
-            Just False -> parseProblemAt pos ErrorC 1071 "ShellCheck only supports sh/bash/dash/ksh/'busybox sh' scripts. Sorry!"
-            Nothing -> parseProblemAt pos ErrorC 1008 "This shebang was unrecognized. ShellCheck only supports sh/bash/dash/ksh/'busybox sh'. Add a 'shell' directive to specify."
+            Just False -> parseProblemAt pos ErrorC 1071 $ getMessage 1071 []
+            Nothing -> parseProblemAt pos ErrorC 1008 $ getMessage 1008 []
 
     isValidShell s =
         let good = null s || any (`isPrefixOf` s) goodShells
@@ -3466,8 +3465,7 @@ makeErrorFor parsecError =
       pos = errorPos parsecError
 
 getStringFromParsec errors =
-        headOrDefault "" (mapMaybe f $ reverse errors)  ++
-            " Fix any mentioned problems and try again."
+        getMessage 1072 [headOrDefault "" (mapMaybe f $ reverse errors)]
     where
         f err =
             case err of
@@ -3519,9 +3517,9 @@ parseShell env name contents = do
 notesForContext list = zipWith ($) [first, second] [(pos, str) | ContextName pos str <- list]
   where
     first (pos, str) = ParseNote pos pos ErrorC 1073 $
-        "Couldn't parse this " ++ str ++ ". Fix to allow more checks."
+        getMessage 1073 [str]
     second (pos, str) = ParseNote pos pos InfoC 1009 $
-        "The mentioned syntax error was in this " ++ str ++ "."
+        getMessage 1009 [str]
 
 -- Go over all T_UnparsedIndex and reparse them as either arithmetic or text
 -- depending on declare -A statements.

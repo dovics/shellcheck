@@ -35,6 +35,7 @@ import ShellCheck.Interface
 import ShellCheck.Parser
 import ShellCheck.Prelude
 import ShellCheck.Regex
+import ShellCheck.Message
 
 import Control.Monad
 import Control.Monad.RWS
@@ -232,17 +233,17 @@ prop_checkTr12 = verifyNot checkTr "tr '[=e=]' 'e'"
 checkTr = CommandCheck (Basename "tr") (mapM_ f . arguments)
   where
     f w | isGlob w = -- The user will go [ab] -> '[ab]' -> 'ab'. Fixme?
-        warn (getId w) 2060 "Quote parameters to tr to prevent glob expansion."
+        warn (getId w) 2060 $ getMessage 2060 []
     f word =
       case getLiteralString word of
-        Just "a-z" -> info (getId word) 2018 "Use '[:lower:]' to support accents and foreign alphabets."
-        Just "A-Z" -> info (getId word) 2019 "Use '[:upper:]' to support accents and foreign alphabets."
+        Just "a-z" -> info (getId word) 2018 $ getMessage 2018 []
+        Just "A-Z" -> info (getId word) 2019 $ getMessage 2019 []
         Just s -> do  -- Eliminate false positives by only looking for dupes in SET2?
           when (not ("-" `isPrefixOf` s || "[:" `isInfixOf` s) && duplicated s) $
-            info (getId word) 2020 "tr replaces sets of chars, not words (mentioned due to duplicates)."
+            info (getId word) 2020 $ getMessage 2020 []
           unless ("[:" `isPrefixOf` s || "[=" `isPrefixOf` s) $
             when ("[" `isPrefixOf` s && "]" `isSuffixOf` s && (length s > 2) && ('*' `notElem` s)) $
-              info (getId word) 2021 "Don't use [] around classes in tr, it replaces literal square brackets."
+              info (getId word) 2021 $ getMessage 2021 []
         Nothing -> return ()
 
     duplicated s =
@@ -258,7 +259,7 @@ checkFindNameGlob = CommandCheck (Basename "find") (f . arguments)  where
     f (x:xs) = foldr g (const $ return ()) xs x
     g b acc a = do
         forM_ (getLiteralString a) $ \s -> when (acceptsGlob s && isGlob b) $
-            warn (getId b) 2061 $ "Quote the parameter to " ++ s ++ " so the shell won't interpret it."
+            warn (getId b) 2061 $ getMessage 2061 []
         acc b
 
 
@@ -280,37 +281,33 @@ prop_checkExpr14 = verify checkExpr "# shellcheck disable=SC2003\nexpr \"$x\" >=
 checkExpr = CommandCheck (Basename "expr") f where
     f t = do
         when (all (`notElem` exceptions) (words $ arguments t)) $
-            style (getId $ getCommandTokenOrThis t) 2003
-                "expr is antiquated. Consider rewriting this using $((..)), ${} or [[ ]]."
+            style (getId $ getCommandTokenOrThis t) 2003 $
+                getMessage 2003 []
 
         case arguments t of
             [lhs, op, rhs] -> do
                 checkOp lhs
                 case getWordParts op of
                     [T_Glob _ "*"] ->
-                        err (getId op) 2304
-                            "* must be escaped to multiply: \\*. Modern $((x * y)) avoids this issue."
+                        err (getId op) 2304 $ getMessage 2304 []
                     [T_Literal _ ":"] | isGlob rhs ->
-                        warn (getId rhs) 2305
-                            "Quote regex argument to expr to avoid it expanding as a glob."
+                        warn (getId rhs) 2305 $ getMessage 2305 []
                     _ -> return ()
 
             [single] | not (willSplit single) ->
-                warn (getId single) 2307
-                    "'expr' expects 3+ arguments but sees 1. Make sure each operator/operand is a separate argument, and escape <>&|."
+                warn (getId single) 2307 $ getMessage 2307 ["1"]
 
             [first, second] |
                 onlyLiteralString first /= "length"
                   && not (willSplit first || willSplit second) -> do
                     checkOp first
-                    warn (getId t) 2307
-                        "'expr' expects 3+ arguments, but sees 2. Make sure each operator/operand is a separate argument, and escape <>&|."
+                    warn (getId t) 2307 $ getMessage 2307 ["2"]
 
             (first:rest) -> do
                 checkOp first
                 forM_ rest $ \t ->
                     -- We already find 95%+ of multiplication and regex earlier, so don't bother classifying this further.
-                    when (isGlob t) $ warn (getId t) 2306 "Escape glob characters in arguments to expr to avoid pathname expansion."
+                    when (isGlob t) $ warn (getId t) 2306 $ getMessage 2306 []
 
             _ -> return ()
 
@@ -322,10 +319,10 @@ checkExpr = CommandCheck (Basename "expr") f where
 
     checkOp side =
         case getLiteralString side of
-            Just "match" -> msg "'expr match' has unspecified results. Prefer 'expr str : regex'."
-            Just "length" -> msg "'expr length' has unspecified results. Prefer ${#var}."
-            Just "substr" -> msg "'expr substr' has unspecified results. Prefer 'cut' or ${var#???}."
-            Just "index" -> msg "'expr index' has unspecified results. Prefer x=${var%%[chars]*}; $((${#x}+1))."
+            Just "match" -> msg $ getMessage 2308 ["expr match", "expr str : regex"]
+            Just "length" -> msg $ getMessage 2308 ["expr length", "${#var}"]
+            Just "substr" -> msg $ getMessage 2308 ["expr substr", "cut / ${var#???}"]
+            Just "index" -> msg $ getMessage 2308 ["expr index", "x=${var%%[chars]*}; $((${#x}+1))"]
             _ -> return ()
       where
         msg = info (getId side) 2308
@@ -373,16 +370,16 @@ checkGrepRe = CommandCheck (Basename "grep") check where
     checkRE _ [] = return ()
     checkRE cmd (re:_) = do
         when (isGlob re) $
-            warn (getId re) 2062 "Quote the grep pattern so the shell won't interpret it."
+            warn (getId re) 2062 $ getMessage 2062 []
 
         unless (any (`elem` flags) grepGlobFlags) $ do
             let string = concat $ oversimplify re
             if isConfusedGlobRegex string then
-                warn (getId re) 2063 "Grep uses regex, but this looks like a glob."
+                warn (getId re) 2063 $ getMessage 2063 []
               else sequence_ $ do
                 char <- getSuspiciousRegexWildcard string
                 return $ info (getId re) 2022 $
-                    "Note that unlike globs, " ++ [char] ++ "* here matches '" ++ [char, char, char] ++ "' but not '" ++ wordStartingWith char ++ "'."
+                    getMessage 2022 [[char], wordStartingWith char]
       where
         flags = map snd $ getAllFlags cmd
         grepGlobFlags = ["fixed-strings", "F", "include", "exclude", "exclude-dir", "o", "only-matching"]
@@ -409,7 +406,7 @@ checkTrapQuotes = CommandCheck (Exactly "trap") (f . arguments) where
     f _ = return ()
     checkTrap (T_NormalWord _ [T_DoubleQuoted _ rs]) = mapM_ checkExpansions rs
     checkTrap _ = return ()
-    warning id = warn id 2064 "Use single quotes, otherwise this expands now rather than when signalled."
+    warning id = warn id 2064 $ getMessage 2064 []
     checkExpansions (T_DollarExpansion id _) = warning id
     checkExpansions (T_Backticked id _) = warning id
     checkExpansions (T_DollarBraced id _ _) = warning id
@@ -425,8 +422,8 @@ prop_checkReturn5 = verify checkReturn "return -1"
 prop_checkReturn6 = verify checkReturn "return 1000"
 prop_checkReturn7 = verify checkReturn "return 'hello world'"
 checkReturn = CommandCheck (Exactly "return") (returnOrExit
-        (\c -> err c 2151 "Only one integer 0-255 can be returned. Use stdout for other data.")
-        (\c -> err c 2152 "Can only return 0-255. Other data should be written to stdout."))
+        (\c -> err c 2151 $ getMessage 2151 [])
+        (\c -> err c 2152 $ getMessage 2152 []))
 
 prop_checkExit1 = verifyNot checkExit "exit"
 prop_checkExit2 = verifyNot checkExit "exit 1"
@@ -436,8 +433,8 @@ prop_checkExit5 = verify checkExit "exit -1"
 prop_checkExit6 = verify checkExit "exit 1000"
 prop_checkExit7 = verify checkExit "exit 'hello world'"
 checkExit = CommandCheck (Exactly "exit") (returnOrExit
-        (\c -> err c 2241 "The exit status can only be one integer 0-255. Use stdout for other data.")
-        (\c -> err c 2242 "Can only exit with status 0-255. Other data should be written to stdout/stderr."))
+        (\c -> err c 2241 $ getMessage 2241 [])
+        (\c -> err c 2242 $ getMessage 2242 []))
 
 returnOrExit multi invalid = (f . arguments)
   where
@@ -472,7 +469,7 @@ checkFindExecWithSingleArgument = CommandCheck (Basename "find") (f . arguments)
 
         guard $ execS `elem` ["-exec", "-execdir"] && termS `elem` [";", "+"]
         guard $ cmdS `matches` commandRegex
-        return $ warn (getId exec) 2150 "-exec does not invoke a shell. Rewrite or use -exec sh -c .. ."
+        return $ warn (getId exec) 2150 $ getMessage 2150 []
     check _ = Nothing
     commandRegex = mkRegex "[ |;]"
 
@@ -500,7 +497,7 @@ checkUnusedEchoEscapes = CommandCheck (Basename "echo") f
     examine token = do
         let str = onlyLiteralString token
         when (str `matches` hasEscapes) $
-            info (getId token) 2028 "echo may not expand escape sequences. Use printf."
+            info (getId token) 2028 $ getMessage 2028 []
 
 
 prop_checkInjectableFindSh1 = verify checkInjectableFindSh "find . -exec sh -c 'echo {}' \\;"
@@ -525,7 +522,7 @@ checkInjectableFindSh = CommandCheck (Basename "find") (check . arguments)
         ]
     action (id, arg) =
         when ("{}" `isInfixOf` arg) $
-            warn id 2156 "Injecting filenames is fragile and insecure. Use parameters."
+            warn id 2156 $ getMessage 2156 []
 
 
 prop_checkFindActionPrecedence1 = verify checkFindActionPrecedence "find . -name '*.wav' -o -name '*.au' -exec rm {} +"
@@ -544,7 +541,7 @@ checkFindActionPrecedence = CommandCheck (Basename "find") (f . arguments)
     isParam strs t = fromMaybe False $ do
         param <- getLiteralString t
         return $ param `elem` strs
-    warnFor t = warn (getId t) 2146 "This action ignores everything before the -o. Use \\( \\) to group."
+    warnFor t = warn (getId t) 2146 $ getMessage 2146 []
 
 
 prop_checkMkdirDashPM0 = verify checkMkdirDashPM "mkdir -p -m 0755 a/b"
@@ -577,7 +574,7 @@ checkMkdirDashPM = CommandCheck (Basename "mkdir") check
         dashM <- find (\(_,f) -> f == "m" || f == "mode") flags
         -- mkdir -pm 0700 dir  is fine, so is ../dir, but dir/subdir is not.
         guard $ any couldHaveSubdirs (drop 1 $ arguments t)
-        return $ warn (getId $ fst dashM) 2174 "When used with -p, -m only applies to the deepest directory."
+        return $ warn (getId $ fst dashM) 2174 $ getMessage 2174 []
     couldHaveSubdirs t = fromMaybe True $ do
         name <- getLiteralString t
         return $ '/' `elem` name && not (name `matches` re)
@@ -610,13 +607,11 @@ checkNonportableSignals = CommandCheck (Exactly "trap") (f . arguments)
         guard $ all isDigit str
         guard $ str /= "0" -- POSIX exit trap
         guard $ str `notElem` ["1", "2", "3", "6", "9", "14", "15" ] -- XSI
-        return $ warn id 2172
-            "Trapping signals by number is not well defined. Prefer signal names."
+        return $ warn id 2172 $ getMessage 2172 []
 
     checkUntrappable id str = do
         guard $ map toLower str `elem` ["kill", "9", "sigkill", "stop", "sigstop"]
-        return $ err id 2173
-            "SIGKILL/SIGSTOP can not be trapped."
+        return $ err id 2173 $ getMessage 2173 []
 
 
 prop_checkInteractiveSu1 = verify checkInteractiveSu "su; rm file; su $USER"
@@ -628,8 +623,7 @@ checkInteractiveSu = CommandCheck (Basename "su") f
     f cmd = when (length (arguments cmd) <= 1) $ do
         path <- getPathM cmd
         when (all undirected path) $
-            info (getId cmd) 2117
-                "To run commands as another user, use su -c or sudo."
+            info (getId cmd) 2117 $ getMessage 2117 []
 
     undirected (T_Pipeline _ _ (_:_:_)) = False
     -- This should really just be modifications to stdin, but meh
@@ -651,8 +645,8 @@ checkSshCommandString = CommandCheck (Basename "ssh") (f . arguments)
             _ -> return ()
     checkArg (T_NormalWord _ [T_DoubleQuoted id parts]) =
         forM_ (find (not . isConstant) parts) $
-            \x -> info (getId x) 2029
-                "Note that, unescaped, this expands on the client side."
+            \x -> info (getId x) 2029 $
+                getMessage 2029 []
     checkArg _ = return ()
 
 
@@ -697,8 +691,7 @@ checkPrintfVar = CommandCheck (Exactly "printf") (f . arguments) where
                 | argCount == 0 && formatCount == 0 ->
                     return () -- This is fine
                 | formatCount == 0 && argCount > 0 ->
-                    err (getId format) 2182
-                        "This printf format string has no variables. Other arguments are ignored."
+                    err (getId format) 2182 $ getMessage 2182 []
                 | any mayBecomeMultipleArgs more ->
                     return () -- We don't know so trust the user
                 | argCount < formatCount && onlyTrailingTs formats argCount ->
@@ -706,13 +699,11 @@ checkPrintfVar = CommandCheck (Exactly "printf") (f . arguments) where
                 | argCount > 0 && argCount `mod` formatCount == 0 ->
                     return () -- Great: a suitable number of arguments
                 | otherwise ->
-                    warn (getId format) 2183 $
-                        "This format string has " ++ show formatCount ++ " " ++ pluraliseIfMany "variable" formatCount ++
-                        ", but is passed " ++ show argCount ++ pluraliseIfMany " argument" argCount ++ "."
+                    warn (getId format) 2183 $ getMessage 2183 [show formatCount, show argCount]
 
         unless ('%' `elem` concat (oversimplify format) || isLiteral format) $
-          info (getId format) 2059
-              "Don't use variables in the printf format string. Use printf '..%s..' \"$foo\"."
+          info (getId format) 2059 $
+              getMessage 2059 []
       where
         onlyTrailingTs format argCount =
             all (== 'T') $ drop argCount format
@@ -765,7 +756,7 @@ prop_checkUuoeCmd4 = verify checkUuoeCmd "echo \"`date`\""
 prop_checkUuoeCmd5 = verifyNot checkUuoeCmd "echo \"The time is $(date)\""
 prop_checkUuoeCmd6 = verifyNot checkUuoeCmd "echo \"$(<file)\""
 checkUuoeCmd = CommandCheck (Exactly "echo") (f . arguments) where
-    msg id = style id 2005 "Useless echo? Instead of 'echo $(cmd)', just use 'cmd'."
+    msg id = style id 2005 $ getMessage 2005 []
     f [token] = when (tokenIsJustCommandOutput token) $ msg (getId token)
     f _ = return ()
 
@@ -780,7 +771,7 @@ checkSetAssignment = CommandCheck (Exactly "set") (f . arguments)
   where
     f (var:rest)
         | (not (null rest) && isVariableName str) || isAssignment str =
-            warn (getId var) 2121 "To assign a variable, use just 'var=value', no 'set ..'."
+            warn (getId var) 2121 $ getMessage 2121 []
       where str = literal var
     f _ = return ()
 
@@ -798,8 +789,7 @@ checkExportedExpansions = CommandCheck (Exactly "export") (mapM_ check . argumen
   where
     check t = sequence_ $ do
         name <- getSingleUnmodifiedBracedString t
-        return . warn (getId t) 2163 $
-            "This does not export '" ++ name ++ "'. Remove $/${} for that, or use ${var?} to quiet."
+        return . warn (getId t) 2163 $ getMessage 2163 [name]
 
 prop_checkReadExpansions1 = verify checkReadExpansions "read $var"
 prop_checkReadExpansions2 = verify checkReadExpansions "read -r $var"
@@ -824,13 +814,12 @@ checkReadExpansions = CommandCheck (Exactly "read") check
     dollarWarning t = sequence_ $ do
         name <- getSingleUnmodifiedBracedString t
         guard $ isVariableName name   -- e.g. not $1
-        return . warn (getId t) 2229 $
-            "This does not read '" ++ name ++ "'. Remove $/${} for that, or use ${var?} to quiet."
+        return . warn (getId t) 2229 $ getMessage 2229 [name]
 
     arrayWarning word =
         when (any isUnquotedBracket $ getWordParts word) $
             warn (getId word) 2313 $
-                "Quote array indices to avoid them expanding as globs."
+                getMessage 2313 []
 
     isUnquotedBracket t =
         case t of
@@ -858,8 +847,7 @@ checkAliasesUsesArgs = CommandCheck (Exactly "alias") (f . arguments)
     checkArg arg =
         let string = getLiteralStringDef "_" arg in
             when ('=' `elem` string && string `matches` re) $
-                err (getId arg) 2142
-                    "Aliases can't use positional parameters. Use a function."
+                err (getId arg) 2142 $ getMessage 2142 []
 
 
 prop_checkAliasesExpandEarly1 = verify checkAliasesExpandEarly "alias foo=\"echo $PWD\""
@@ -870,7 +858,7 @@ checkAliasesExpandEarly = CommandCheck (Exactly "alias") (f . arguments)
     f = mapM_ checkArg
     checkArg arg | '=' `elem` concat (oversimplify arg) =
         forM_ (find (not . isLiteral) $ getWordParts arg) $
-            \x -> warn (getId x) 2139 "This expands when defined, not when used. Consider escaping."
+            \x -> warn (getId x) 2139 $ getMessage 2139 []
     checkArg _ = return ()
 
 
@@ -883,7 +871,7 @@ checkUnsetGlobs = CommandCheck (Exactly "unset") (mapM_ check . arguments)
   where
     check arg =
         when (isGlob arg) $
-            warn (getId arg) 2184 "Quote arguments to unset so they're not glob expanded."
+            warn (getId arg) 2184 $ getMessage 2184 []
 
 
 prop_checkFindWithoutPath1 = verify checkFindWithoutPath "find -type f"
@@ -898,7 +886,7 @@ checkFindWithoutPath = CommandCheck (Basename "find") f
   where
     f t@(T_SimpleCommand _ _ (cmd:args)) =
         unless (t `hasFlag` "help" || hasPath args) $
-            info (getId cmd) 2185 "Some finds don't have a default path. Specify '.' explicitly."
+            info (getId cmd) 2185 $ getMessage 2185 []
 
     -- This is a bit of a kludge. find supports flag arguments both before and
     -- after the path, as well as multiple non-flag arguments that are not the
@@ -922,7 +910,7 @@ checkTimeParameters = CommandCheck (Exactly "time") f
         whenShell [Bash, Sh] $
             let s = concat $ oversimplify args in
                 when ("-" `isPrefixOf` s && s /= "-p") $
-                    info (getId cmd) 2023 "The shell may override 'time' as seen in man time(1). Use 'command time ..' for that one."
+                    info (getId cmd) 2023 $ getMessage 2023 []
 
     f _ = return ()
 
@@ -934,9 +922,9 @@ checkTimedCommand = CommandCheck (Exactly "time") f where
         whenShell [Sh, Dash, BusyboxSh] $ do
             let cmd = last args -- "time" is parsed with a command as argument
             when (isPiped cmd) $
-                warn (getId c) 2176 "'time' is undefined for pipelines. time single stage or bash -c instead."
+                warn (getId c) 2176 $ getMessage 2176 []
             when (isSimple cmd == Just False) $
-                warn (getId cmd) 2177 "'time' is undefined for compound commands, time sh -c instead."
+                warn (getId cmd) 2177 $ getMessage 2177 []
     f _ = return ()
     isPiped cmd =
         case cmd of
@@ -958,7 +946,7 @@ checkLocalScope = CommandCheck (Exactly "local") $ \t ->
     whenShell [Bash, Dash, BusyboxSh] $ do -- Ksh allows it, Sh doesn't support local
         path <- getPathM t
         unless (any isFunctionLike path) $
-            err (getId $ getCommandTokenOrThis t) 2168 "'local' is only valid in functions."
+            err (getId $ getCommandTokenOrThis t) 2168 $ getMessage 2168 []
 
 prop_checkMultipleDeclaring1 = verify (checkMultipleDeclaring "local") "q() { local readonly var=1; }"
 prop_checkMultipleDeclaring2 = verifyNot (checkMultipleDeclaring "local") "q() { local var=1; }"
@@ -973,21 +961,20 @@ checkMultipleDeclaring cmd = CommandCheck (Exactly cmd) (mapM_ check . arguments
         lit <- getUnquotedLiteral t
         guard $ lit `elem` declaringCommands
         return $ err (getId $ getCommandTokenOrThis t) 2316 $
-                 "This applies " ++ cmd ++ " to the variable named " ++ lit ++
-                 ", which is probably not what you want. Use a separate command or the appropriate `declare` options instead."
+                 getMessage 2316 []
 
 prop_checkDeprecatedTempfile1 = verify checkDeprecatedTempfile "var=$(tempfile)"
 prop_checkDeprecatedTempfile2 = verifyNot checkDeprecatedTempfile "tempfile=$(mktemp)"
 checkDeprecatedTempfile = CommandCheck (Basename "tempfile") $
-    \t -> warn (getId $ getCommandTokenOrThis t) 2186 "tempfile is deprecated. Use mktemp instead."
+    \t -> warn (getId $ getCommandTokenOrThis t) 2186 $ getMessage 2186 []
 
 prop_checkDeprecatedEgrep = verify checkDeprecatedEgrep "egrep '.+'"
 checkDeprecatedEgrep = CommandCheck (Basename "egrep") $
-    \t -> info (getId $ getCommandTokenOrThis t) 2196 "egrep is non-standard and deprecated. Use grep -E instead."
+    \t -> info (getId $ getCommandTokenOrThis t) 2196 $ getMessage 2196 []
 
 prop_checkDeprecatedFgrep = verify checkDeprecatedFgrep "fgrep '*' files"
 checkDeprecatedFgrep = CommandCheck (Basename "fgrep") $
-    \t -> info (getId $ getCommandTokenOrThis t) 2197 "fgrep is non-standard and deprecated. Use grep -F instead."
+    \t -> info (getId $ getCommandTokenOrThis t) 2197 $ getMessage 2197 []
 
 prop_checkWhileGetoptsCase1 = verify checkWhileGetoptsCase "while getopts 'a:b' x; do case $x in a) foo;; esac; done"
 prop_checkWhileGetoptsCase2 = verify checkWhileGetoptsCase "while getopts 'a:' x; do case $x in a) foo;; b) bar;; esac; done"
@@ -1026,7 +1013,7 @@ checkWhileGetoptsCase = CommandCheck (Exactly "getopts") f
                 mapM_ (warnUnhandled optId id) $ catMaybes $ M.keys notHandled
 
                 unless (any (`M.member` handledMap) [Just "*",Just "?"]) $
-                    warn id 2220 "Invalid flags are not handled. Add a *) case."
+                    warn id 2220 $ getMessage 2220 []
 
             mapM_ warnRedundant $ M.toList notRequested
 
@@ -1038,11 +1025,11 @@ checkWhileGetoptsCase = CommandCheck (Exactly "getopts") f
             notRequested = M.difference handledMap requestedMap
 
     warnUnhandled optId caseId str =
-        warn caseId 2213 $ "getopts specified -" ++ (e4m str) ++ ", but it's not handled by this 'case'."
+        warn caseId 2213 $ getMessage 2213 [e4m str]
 
     warnRedundant (Just str, expr)
         | str `notElem` ["*", ":", "?"] =
-            warn (getId expr) 2214 "This case is not specified by getopts."
+            warn (getId expr) 2214 $ getMessage 2214 []
     warnRedundant _ = return ()
 
     getHandledStrings (_, globs, _) =
@@ -1095,7 +1082,7 @@ checkCatastrophicRm = CommandCheck (Basename "rm") $ \t ->
         case getLiteralString token of
             Just str ->
                 when (fixPath str `elem` importantPaths) $
-                    warn (getId token) 2114 "Warning: deletes a system directory."
+                    warn (getId token) 2114 $ getMessage 2114 []
             Nothing ->
                 checkWord' token
 
@@ -1103,7 +1090,7 @@ checkCatastrophicRm = CommandCheck (Basename "rm") $ \t ->
         filename <- getPotentialPath token
         let path = fixPath filename
         return . when (path `elem` importantPaths) $
-            warn (getId token) 2115 $ "Use \"${var:?}\" to ensure this never expands to " ++ path ++ " ."
+            warn (getId token) 2115 $ getMessage 2115 [path]
 
     fixPath filename =
         let normalized = skipRepeating '/' . skipRepeating '*' $ filename in
@@ -1138,7 +1125,7 @@ prop_checkLetUsage2 = verifyNot checkLetUsage "(( a=1 ))"
 checkLetUsage = CommandCheck (Exactly "let") f
   where
     f t = whenShell [Bash,Ksh] $ do
-        style (getId t) 2219 $ "Instead of 'let expr', prefer (( expr )) ."
+        style (getId t) 2219 $ getMessage 2219 []
 
 
 missingDestination handler token = do
@@ -1164,15 +1151,15 @@ prop_checkMvArguments8 = verifyNot checkMvArguments "mv --version"
 prop_checkMvArguments9 = verifyNot checkMvArguments "mv \"${!var}\""
 checkMvArguments = CommandCheck (Basename "mv") $ missingDestination f
   where
-    f t = err (getId t) 2224 "This mv has no destination. Check the arguments."
+    f t = err (getId t) 2224 $ getMessage 2224 []
 
 checkCpArguments = CommandCheck (Basename "cp") $ missingDestination f
   where
-    f t = err (getId t) 2225 "This cp has no destination. Check the arguments."
+    f t = err (getId t) 2225 $ getMessage 2225 []
 
 checkLnArguments = CommandCheck (Basename "ln") $ missingDestination f
   where
-    f t = warn (getId t) 2226 "This ln has no destination. Check the arguments, or specify '.' explicitly."
+    f t = warn (getId t) 2226 $ getMessage 2226 []
 
 
 prop_checkFindRedirections1 = verify    checkFindRedirections "find . -exec echo {} > file \\;"
@@ -1188,13 +1175,13 @@ checkFindRedirections = CommandCheck (Basename "find") f
                 let minRedir = minimum $ map getId redirs
                 let maxArg   = maximum $ map getId args
                 when (minRedir < maxArg) $
-                    warn minRedir 2227
-                        "Redirection applies to the find command itself. Rewrite to work per action (or move to end)."
+                    warn minRedir 2227 $ getMessage 2227 []
+                        
             _ -> return ()
 
 prop_checkWhich = verify checkWhich "which '.+'"
 checkWhich = CommandCheck (Basename "which") $
-    \t -> info (getId $ getCommandTokenOrThis t) 2230 "'which' is non-standard. Use builtin 'command -v' instead."
+    \t -> info (getId $ getCommandTokenOrThis t) 2230 $ getMessage 2230 []
 
 prop_checkSudoRedirect1 = verify checkSudoRedirect "sudo echo 3 > /proc/file"
 prop_checkSudoRedirect2 = verify checkSudoRedirect "sudo cmd < input"
@@ -1214,14 +1201,12 @@ checkSudoRedirect = CommandCheck (Basename "sudo") f
         | (null s || s == "&") && not (special file) =
         case op of
             T_Less _ ->
-              info (getId op) 2024
-                "sudo doesn't affect redirects. Use sudo cat file | .."
+              info (getId op) 2024 $ getMessage 2024 ["sudo cat file | .."]
             T_Greater _ ->
-              warn (getId op) 2024
-                "sudo doesn't affect redirects. Use ..| sudo tee file"
+              warn (getId op) 2024 $ getMessage 2024 ["..| sudo tee file"]
             T_DGREAT _ ->
-              warn (getId op) 2024
-                "sudo doesn't affect redirects. Use .. | sudo tee -a file"
+              warn (getId op) 2024 $ getMessage 2024 [".. | sudo tee -a file"]
+
             _ -> return ()
     warnAbout _ = return ()
     special file = concat (oversimplify file) == "/dev/null"
@@ -1240,7 +1225,7 @@ checkSudoArgs = CommandCheck (Basename "sudo") f
         (_,(commandArg, _)) <- find (null . fst) opts
         command <- getLiteralString commandArg
         guard $ command `elem` builtins
-        return $ warn (getId t) 2232 $ "Can't use sudo with builtins like " ++ command ++ ". Did you want sudo sh -c .. instead?"
+        return $ warn (getId t) 2232 $ getMessage 2232 [command]
     builtins = [ "cd", "eval", "export", "history", "read", "source", "wait" ]
     -- This mess is why ShellCheck prefers not to know.
     parseOpts = getBsdOpts "vAknSbEHPa:g:h:p:u:c:T:r:"
@@ -1252,8 +1237,7 @@ checkSourceArgs = CommandCheck (Exactly ".") f
   where
     f t = whenShell [Sh, Dash] $
         case arguments t of
-            (file:arg1:_) -> warn (getId arg1) 2240 $
-                "The dot command does not support arguments in sh/dash. Set them as variables."
+            (file:arg1:_) -> warn (getId arg1) 2240 $ getMessage 2240 []
             _ -> return ()
 
 prop_checkChmodDashr1 = verify checkChmodDashr "chmod -r 0755 dir"
@@ -1265,7 +1249,7 @@ checkChmodDashr = CommandCheck (Basename "chmod") f
     check t = sequence_ $ do
         flag <- getLiteralString t
         guard $ flag == "-r"
-        return $ warn (getId t) 2253 "Use -R to recurse, or explicitly a-r to remove read permissions."
+        return $ warn (getId t) 2253 $ getMessage 2253 []
 
 prop_checkXargsDashi1 = verify checkXargsDashi "xargs -i{} echo {}"
 prop_checkXargsDashi2 = verifyNot checkXargsDashi "xargs -I{} echo {}"
@@ -1277,7 +1261,7 @@ checkXargsDashi = CommandCheck (Basename "xargs") f
     f t = sequence_ $ do
         opts <- parseOpts $ arguments t
         (option, value) <- lookup "i" opts
-        return $ info (getId option) 2267 "GNU xargs -i is deprecated in favor of -I{}"
+        return $ info (getId option) 2267 $ getMessage 2267 []
     parseOpts = getBsdOpts "0oprtxadR:S:J:L:l:n:P:s:e:E:i:I:"
 
 
@@ -1297,11 +1281,9 @@ checkArgComparison cmd = CommandCheck (Exactly cmd) wordsWithEqual
         str <- getLeadingUnquotedString arg
         case str of
             '=':_ ->
-                return $ err (headId arg) 2290 $
-                    "Remove spaces around = to assign."
+                return $ err (headId arg) 2290 $ getMessage 2290 ["="]
             '+':'=':_ ->
-                return $ err (headId arg) 2290 $
-                    "Remove spaces around += to append."
+                return $ err (headId arg) 2290 $ getMessage 2290 ["+="]
             _ -> Nothing
 
        -- 'let' is parsed as a sequence of arithmetic expansions,
@@ -1310,8 +1292,7 @@ checkArgComparison cmd = CommandCheck (Exactly cmd) wordsWithEqual
         token <- getTrailingUnquotedLiteral arg
         str <- getLiteralString token
         guard $ "=" `isSuffixOf` str
-        return $ err (getId token) 2290 $
-            "Remove spaces around = to assign."
+        return $ err (getId token) 2290 $ getMessage 2290 ["="]
 
     headId t =
         case t of
@@ -1357,7 +1338,7 @@ checkMaskedReturns str = CommandCheck (Exactly str) checkCmd
             return $ mapM_ checkArgs $ arguments t
 
     checkArgs (T_Assignment id _ _ _ word) | any hasReturn $ getWordParts word =
-        warn id 2155 "Declare and assign separately to avoid masking return values."
+        warn id 2155 $ getMessage 2155 []
     checkArgs _ = return ()
 
     isLocalInFunction = (`elem` ["local", "declare", "typeset"])
@@ -1393,7 +1374,7 @@ checkUnquotedEchoSpaces = CommandCheck (Basename "echo") check
             (T_Redirecting _ redirTokens _) <- redir
             let redirPositions = mapMaybe (\c -> fst <$> M.lookup (getId c) m) redirTokens
             guard $ any (hasSpacesBetween redirPositions) pairs
-            return $ info (getId t) 2291 "Quote repeated spaces to avoid them collapsing into one."
+            return $ info (getId t) 2291 $ getMessage 2291 []
 
     hasSpacesBetween redirs ((a,b), (c,d)) =
         posLine a == posLine d
@@ -1411,8 +1392,8 @@ checkEvalArray = CommandCheck (Exactly "eval") (mapM_ check . concatMap getWordP
     check t =
         when (isArrayExpansion t) $
             if isEscaped t
-            then style (getId t) 2293 "When eval'ing @Q-quoted words, use * rather than @ as the index."
-            else warn (getId t) 2294 "eval negates the benefit of arrays. Drop eval to preserve whitespace/symbols (or eval as string)."
+            then style (getId t) 2293 $ getMessage 2293 []
+            else warn (getId t) 2294 $ getMessage 2294 []
 
     isEscaped q =
         case q of
@@ -1449,7 +1430,7 @@ checkBackreferencingDeclaration cmd = CommandCheck (Exactly cmd) check
         let reused = M.intersection backrefs references
         mapM msg $ M.toList reused
 
-    msg (name, id) = warn id 2318 $ "This assignment is used again in this '" ++ cmd ++ "', but won't have taken effect. Use two '" ++ cmd ++ "'s."
+    msg (name, id) = warn id 2318 $ getMessage 2318 [cmd]
 
     findReferences cfga list = do
         let graph = CF.graph cfga

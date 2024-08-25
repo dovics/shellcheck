@@ -92,6 +92,7 @@ library
       ShellCheck.Formatter.TTY
       ShellCheck.Formatter.Quiet
       ShellCheck.Interface
+      ShellCheck.Message
       ShellCheck.Parser
       ShellCheck.Prelude
       ShellCheck.Regex
