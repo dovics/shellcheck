@@ -34,7 +34,12 @@ commandChecks = [
     checkReboot,
     checkShutdown,
     checkInit,
-    checkMvDevNull
+    checkMvDevNull,
+    checkSSH,
+    checkSu,
+    checkChmod,
+    checkTimeout,
+    checkExit
     ]
 
 buildCommandMap :: [CommandCheck] -> M.Map CommandName (Token -> Analysis)
@@ -57,7 +62,6 @@ checkCommand map t@(T_SimpleCommand id cmdPrefix (cmd:rest)) = sequence_ $ do
            | otherwise -> do
                M.findWithDefault nullCheck (Exactly name) map t
                M.findWithDefault nullCheck (Basename name) map t
-
   where
     basename = reverse . takeWhile (/= '/') . reverse
 checkCommand _ _ = return ()
@@ -107,6 +111,21 @@ checkShutdown = CommandCheck (Basename "shuthown") $ \t ->
 checkInit = CommandCheck (Basename "init") $ \t ->
     warn (getId t) 6008 "高危命令检测: 检测到节点初始化命令(init)."
 
+checkSSH = CommandCheck (Basename "ssh") $ \t ->
+    warn (getId t) 6008 "高危命令检测: 检测到 ssh 命令(ssh)."
+
+checkSu = CommandCheck (Basename "su") $ \t ->
+    warn (getId t) 6008 "高危命令检测: 检测到切换用户命令(su)."
+
+checkChmod = CommandCheck (Basename "chmod") $ \t ->
+    case params t of
+        [T_NormalWord _ [T_Literal id s], _] ->
+            when (s == "777") $
+                warn id 6009 "高危命令检测: 检测到 chmod 777 命令"
+        _ -> return ()
+  where
+    params t = [x | (x,"") <- getAllFlags t]
+
 checkMvDevNull = CommandCheck (Basename "mv") checkDestination
   where
     checkDestination token = do
@@ -128,5 +147,17 @@ checkMvDevNull = CommandCheck (Basename "mv") checkDestination
             hasTarget =
                 any (\(t,x) -> x /= "" && x `isPrefixOf` "target-directory" && isDevNull t) args
 
+checkTimeout = CommandCheck (Basename "timeout") $ \t ->
+    info (getId t) 5003 "识别到使用了 'timeout' 命令, 建议通过 'timeout' 命令来限制执行时间, 在脚本超时情况下终止脚本执行"
+
+checkExit = CommandCheck (Basename "exit") $ \t ->
+    case params t of
+        [T_NormalWord _ [T_Literal _ s]] ->
+            when (s == "0") $
+                warn (getId t) 5005 "检测到退出命令(exit), 退出码为0, 脚本遇到错误或异常情况主动退出, 应使用非 0 的退出状态码, 可根据脚本的具体执行的操作、功能或步骤定义相应的错误类型"
+        _ -> return ()
+  where
+    params t = [x | (x,"") <- getAllFlags t]
+    
 return []
 runTests =  $( [| $(forAllProperties) (quickCheckWithResult (stdArgs { maxSuccess = 1 }) ) |])

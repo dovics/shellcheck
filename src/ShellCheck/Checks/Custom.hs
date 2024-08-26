@@ -27,7 +27,7 @@ import Data.Char
 import qualified Data.Set as Set
 import Data.Foldable
 import Data.List
-
+import qualified Data.List.NonEmpty as NE
 
 checker :: Parameters -> Checker
 checker params = Checker {
@@ -43,9 +43,10 @@ treeChecks = [
 
 nodeChecks :: [Parameters -> Token -> Writer [TokenComment] ()]
 nodeChecks = [
-    checkSetESuppressed
+    checkSetE
     ,checkCompareArgsNumber
     ,checkDevRedirect
+    ,checkCommandResult
     ]
 
 runNodeAnalysis f p t = execWriter (doAnalysis (f p) t)
@@ -60,7 +61,7 @@ checkNotCamelCaseVar params t =
   where
     isLocal = any isLower
    
-    containUnderscore = foldr ((||) . (== '_')) True
+    containUnderscore = foldr ((||) . (== '_')) False
 
     toCamelCase :: String -> String
     toCamelCase ('_':xs) = toCamelCase' xs
@@ -89,18 +90,9 @@ checkNotCamelCaseVar params t =
 
     allVars = Map.toList $ Map.difference varMap defaultAssigned
 
-checkSetESuppressed params t = case t of
-    T_Script _ (T_Literal _ str) _ -> when (str `matches` re) $ setEMsg (getId t)
-    T_SimpleCommand {} ->
-        when
-        (t `isUnqualifiedCommand` "set" 
-            && ("errexit" `elem` oversimplify t
-            || "e" `elem` map snd (getAllFlags t)))
-        $ setEMsg (getId t)
-    _ -> return ()
-    where
-        re = mkRegex "[[:space:]]-[^-]*e"
-        setEMsg id = info id 5001 "设置 set -e 选项, 避免后续脚本在错误命令状态下继续执行"
+checkSetE params (T_Annotation _ _ (T_Script id _ _)) = 
+    unless (hasSetE params) $ warn id 5001 "建议设置 set -e 选项, 避免后续脚本在错误命令状态下继续执行"
+checkSetE _ _ = return ()
 
 checkCompareArgsNumber param t = case t of
     TC_Binary _ _ _ lhs _ -> case lhs of
@@ -124,6 +116,77 @@ checkDevRedirect params redir@(T_Redirecting _ [
 
     error t = warn (getId t) 6010 "高危命令检测: 重定向到 /dev/sd*"
 checkDevRedirect _ _ = return ()
+
+checkCommandResult params token =
+    case token of
+        TC_Binary id _ op lhs rhs -> check lhs rhs
+        TA_Binary id op lhs rhs
+            | op `elem` [">", "<", ">=", "<=", "==", "!="] -> check lhs rhs
+        -- TA_Sequence _ [exp]
+        --     | isExitCode exp -> message (getId exp)
+        _ -> return ()
+  where
+    -- We don't want to warn about composite expressions like
+    -- [[ $? -eq 0 || $? -eq 4 ]] since these can be annoying to rewrite.
+    isOnlyTestInCommand t =
+        case NE.tail $ getPath (parentMap params) t of
+            T_Condition {}:_ -> True
+            T_Arithmetic {}:_ -> True
+            TA_Sequence _ [_]:T_Arithmetic {}:_ -> True
+
+            -- Some negations and groupings are also fine
+            next@(TC_Unary _ _ "!" _):_ -> isOnlyTestInCommand next
+            next@(TA_Unary _ "!" _):_ -> isOnlyTestInCommand next
+            next@TC_Group {}:_ -> isOnlyTestInCommand next
+            next@(TA_Sequence _ [_]):_ -> isOnlyTestInCommand next
+            next@(TA_Parenthesis _ _):_ -> isOnlyTestInCommand next
+            _ -> False
+
+    -- TODO: Do better $? tracking and filter on whether
+    -- the target command is in the same function
+    getFirstCommandInFunction = f
+      where
+        f t = case t of
+            T_Function _ _ _ _ x -> f x
+            T_BraceGroup _ (x:_) -> f x
+            T_Subshell _ (x:_) -> f x
+            T_Annotation _ _ x -> f x
+            T_AndIf _ x _ -> f x
+            T_OrIf _ x _ -> f x
+            T_Pipeline _ _ (x:_) -> f x
+            T_Redirecting _ _ (T_IfExpression _ ((x:_,_):_) _) -> f x
+            x -> x
+
+    isFirstCommandInFunction = fromMaybe False $ do
+        let path = getPath (parentMap params) token
+        func <- find isFunction path
+        cmd <- getClosestCommand (parentMap params) token
+        return $ getId cmd == getId (getFirstCommandInFunction func)
+
+    check lhs rhs = case (isExitCode lhs, isExitCode rhs) of
+        (True, False) -> case getLiteralString rhs of
+            Just code    -> message code (getId rhs)           
+            _ -> return ()
+        (False, True) -> case getLiteralString lhs of
+            Just code    -> message code (getId rhs)           
+            _ -> return ()
+        (_, _) -> return ()
+
+    isNotFount t = getLiteralString t == Just "127"
+    isZero t = getLiteralString t == Just "0"
+    isExitCode t =
+        case getWordParts t of
+            [T_DollarBraced _ _ l] -> concat (oversimplify l) == "?"
+            _ -> False
+
+    message code id = when (isOnlyTestInCommand token && not isFirstCommandInFunction) $ info id 5004 $ 
+        "退出码检查, " ++ code ++ "表示" ++ case code of
+            "0" -> "命令执行成功"
+            "1" -> "一般性未知错误"
+            "2" -> "错误使用命令参数"
+            "126" -> "命令无法执行"
+            "127" -> "找不到命令"
+            _ -> "未知错误"
 
 prop_CustomTestsWork = True
 

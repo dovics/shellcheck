@@ -220,14 +220,6 @@ getLangMessage 1066 lang [] =
     case lang of
         _    -> "Don't use $ on the left side of assignments."
 
-getLangMessage 1067 lang [] =
-    case lang of
-        _    -> "Script contains undefined variable"
-
-getLangMessage 1068 lang [] =
-    case lang of
-        _    -> "Script contains undefined variable"
-
 getLangMessage 1069 lang [] =
     case lang of
         _    -> "You need a space before the [ ."
@@ -408,10 +400,6 @@ getLangMessage 1116 lang [] =
     case lang of
         _    -> "Missing $ on a $((..)) expression? (or use ( ( for arrays)."
 
-getLangMessage 1117 lang [] =
-    case lang of
-        _    -> "Script contains undefined variable"
-
 getLangMessage 1118 lang [] =
     case lang of
         _    -> "Delete whitespace after the here-doc end token."
@@ -484,10 +472,6 @@ getLangMessage 1135 lang [] =
     case lang of
         _    -> "Prefer escape over ending quote to make $ literal. Instead of \"It costs $\"5, use \"It costs \\$5\"."
 
-getLangMessage 1136 lang [] =
-    case lang of
-        _    -> "Script contains undefined variable"
-
 getLangMessage 1137 lang [c] =
     case lang of
         _    -> case c of 
@@ -558,10 +542,6 @@ getLangMessage 2006 lang [] =
 getLangMessage 2007 lang [] =
     case lang of
         _    -> "Use $((..)) instead of deprecated $[..]"
-
-getLangMessage 2008 lang [] =
-    case lang of
-        _    -> "Script contains undefined variable"
 
 getLangMessage 2009 lang [] =
     case lang of
@@ -682,14 +662,6 @@ getLangMessage 2037 lang [] =
 getLangMessage 2038 lang [] =
     case lang of
         _    -> "Use 'find .. -print0 | xargs -0 ..' or 'find .. -exec .. +' to allow non-alphanumeric filenames."
-
-getLangMessage 2039 lang [] =
-    case lang of
-        _    -> "Script contains undefined variable"
-
-getLangMessage 2040 lang [] =
-    case lang of
-        _    -> "Script contains undefined variable"
 
 getLangMessage 2041 lang [] =
     case lang of
@@ -1050,10 +1022,6 @@ getLangMessage 2129 lang [] =
     case lang of
         _    -> "Consider using { cmd1; cmd2; } >> file instead of individual redirects."
 
-getLangMessage 2130 lang [] =
-    case lang of
-        _    -> "Script contains undefined variable"
-
 getLangMessage 2139 lang [] =
     case lang of
         _    -> "This expands when defined, not when used. Consider escaping."
@@ -1098,10 +1066,6 @@ getLangMessage 2147 lang [] =
 getLangMessage 2148 lang [] =
     case lang of
         _    -> "Tips depend on target shell and yours is unknown. Add a shebang or a 'shell' directive."
-
-getLangMessage 2149 lang [] =
-    case lang of
-        _    -> "Script contains undefined variable"
 
 getLangMessage 2150 lang [] =
     case lang of
@@ -1167,10 +1131,6 @@ getLangMessage 2165 lang [] =
     case lang of
         _    -> "This nested loop overrides the index variable of its parent."
 
-getLangMessage 2166 lang [] =
-    case lang of
-        _    -> "Script contains undefined variable"
-
 getLangMessage 2167 lang [] =
     case lang of
         _    -> "This parent loop has its index variable overridden."
@@ -1178,10 +1138,6 @@ getLangMessage 2167 lang [] =
 getLangMessage 2168 lang [] =
     case lang of
         _    -> "'local' is only valid in functions."
-
-getLangMessage 2169 lang [] =
-    case lang of
-        _    -> "Script contains undefined variable"
 
 getLangMessage 2170 lang [op, suggestion, fix, kind] =
     case lang of
@@ -1843,10 +1799,6 @@ getLangMessage 2328 lang [] =
     case lang of
         _    -> "This redirection takes output away from the command substitution"
 
-getLangMessage 2329 lang [] =
-    case lang of
-        _    -> "Script contains undefined variable"
-
 getLangMessage 2330 lang [] =
     case lang of
         _    -> "BusyBox [[ .. ]] does not support glob matching. Use a case statement."
@@ -2091,7 +2043,7 @@ getLangMessage 3061 lang [] =
     case lang of
         _    -> "read without a variable is"
 
-getLangMessage _ _ _ = "不支持的方法"
+getLangMessage _ _ _ = "Unknown message"
 
 warpShellSupportLangMessage Dash lang s = 
     case lang of
