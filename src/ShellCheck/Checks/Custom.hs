@@ -26,14 +26,33 @@ import Data.Maybe
 import Data.Char
 import qualified Data.Set as Set
 import Data.Foldable
+import Data.List
 
 
 checker :: Parameters -> Checker
 checker params = Checker {
     perScript = \(Root root) -> do
-            tell $ concatMap (\f -> f params root) [checkNotCamelCaseVar, checkSetESuppressed, checkCompareArgsNumber],
+            tell $ concatMap (\f -> f params root) treeChecks,
     perToken = const $ return ()
   }
+
+treeChecks = [
+    nodeChecksToTreeCheck nodeChecks
+    ,checkNotCamelCaseVar
+    ]
+
+nodeChecks :: [Parameters -> Token -> Writer [TokenComment] ()]
+nodeChecks = [
+    checkSetESuppressed
+    ,checkCompareArgsNumber
+    ,checkDevRedirect
+    ]
+
+runNodeAnalysis f p t = execWriter (doAnalysis (f p) t)
+nodeChecksToTreeCheck checkList =
+    runNodeAnalysis
+        (\p t -> (mapM_ ((\ f -> f t) . (\ f -> f p))
+            checkList))
 
 checkNotCamelCaseVar :: Parameters -> p -> [TokenComment]
 checkNotCamelCaseVar params t = 
@@ -70,37 +89,41 @@ checkNotCamelCaseVar params t =
 
     allVars = Map.toList $ Map.difference varMap defaultAssigned
 
-checkSetESuppressed :: Parameters -> Token -> [TokenComment]
-checkSetESuppressed params t = 
-    execWriter $ doAnalysis isSetE t
+checkSetESuppressed params t = case t of
+    T_Script _ (T_Literal _ str) _ -> when (str `matches` re) $ setEMsg (getId t)
+    T_SimpleCommand {} ->
+        when
+        (t `isUnqualifiedCommand` "set" 
+            && ("errexit" `elem` oversimplify t
+            || "e" `elem` map snd (getAllFlags t)))
+        $ setEMsg (getId t)
+    _ -> return ()
     where
         re = mkRegex "[[:space:]]-[^-]*e"
         setEMsg id = info id 5001 "设置 set -e 选项, 避免后续脚本在错误命令状态下继续执行"
-        isSetE t =
-            case t of
-                T_Script _ (T_Literal _ str) _ -> when (str `matches` re) $ setEMsg (getId t)
-                T_SimpleCommand {} ->
-                    when
-                    (t `isUnqualifiedCommand` "set" 
-                        && ("errexit" `elem` oversimplify t
-                            || "e" `elem` map snd (getAllFlags t)))
-                    $ setEMsg (getId t)
-                _ -> return ()
 
-checkCompareArgsNumber param t = do
-    execWriter $ doAnalysis isCompareArgsNumber t
+checkCompareArgsNumber param t = case t of
+    TC_Binary _ _ _ lhs _ -> case lhs of
+        T_NormalWord _ [T_DoubleQuoted _ [word]] -> check word
+        T_NormalWord _ [word] -> check word
+        _ -> return ()
+    _ -> return ()
   where
     infoFor id = info id 5002 "通过 $# 等命令检查传递给脚本的参数数量，确保传入参数数量与预期一致"
     check t = case t of
         T_DollarBraced id _ val | getLiteralString val == Just "#" -> do infoFor id
         _ -> return ()
-            
-    isCompareArgsNumber t = case t of
-        TC_Binary _ _ _ lhs _ -> case lhs of
-            T_NormalWord _ [T_DoubleQuoted _ [word]] -> check word
-            T_NormalWord _ [word] -> check word
-            _ -> return ()
-        _ -> return ()
+
+checkDevRedirect params redir@(T_Redirecting _ [
+    T_FdRedirect _ _ (T_IoFile _ _ file)
+    ] _) =  when (isDev file) $ error file
+  where
+    isDev t = case t of
+        T_NormalWord _ [T_Literal _ str] -> str `isPrefixOf` "/dev/sd"
+        _ -> False
+
+    error t = warn (getId t) 6010 "高危命令检测: 重定向到 /dev/sd*"
+checkDevRedirect _ _ = return ()
 
 prop_CustomTestsWork = True
 

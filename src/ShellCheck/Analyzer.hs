@@ -28,6 +28,7 @@ import qualified ShellCheck.Checks.Commands
 import qualified ShellCheck.Checks.ControlFlow
 import qualified ShellCheck.Checks.Custom
 import qualified ShellCheck.Checks.ShellSupport
+import qualified ShellCheck.Checks.CustomCommands
 
 
 -- TODO: Clean up the cruft this is layered on
@@ -45,6 +46,7 @@ checkers spec params = mconcat $ map ($ params) [
     ShellCheck.Checks.Commands.checker spec,
     ShellCheck.Checks.ControlFlow.checker spec,
     ShellCheck.Checks.Custom.checker,
+    ShellCheck.Checks.CustomCommands.checker spec,
     ShellCheck.Checks.ShellSupport.checker
     ]
 

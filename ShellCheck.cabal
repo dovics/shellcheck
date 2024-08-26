@@ -79,6 +79,7 @@ library
       ShellCheck.Checks.Commands
       ShellCheck.Checks.ControlFlow
       ShellCheck.Checks.Custom
+      ShellCheck.Checks.CustomCommands
       ShellCheck.Checks.ShellSupport
       ShellCheck.Data
       ShellCheck.Debug
