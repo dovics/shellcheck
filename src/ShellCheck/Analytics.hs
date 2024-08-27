@@ -2369,7 +2369,7 @@ checkUnusedAssignments params t = execWriter (mapM_ warnFor unused)
     warnFor (name, token) =
         unless ("_" `isPrefixOf` name) $
             warn (getId token) 2034 $
-                getMessage 3034 [name]
+                getMessage 2034 [name]
 
     stripSuffix = takeWhile isVariableChar
     defaultMap = Map.fromList $ zip internalVariables $ repeat ()

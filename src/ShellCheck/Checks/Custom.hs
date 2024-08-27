@@ -6,6 +6,7 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE LambdaCase #-}
 
 module ShellCheck.Checks.Custom (checker, ShellCheck.Checks.Custom.runTests) where
 
@@ -39,24 +40,24 @@ checker params = Checker {
 treeChecks = [
     nodeChecksToTreeCheck nodeChecks
     ,checkNotCamelCaseVar
+    ,checkCompareArgsNumber
     ]
 
 nodeChecks :: [Parameters -> Token -> Writer [TokenComment] ()]
 nodeChecks = [
     checkSetE
-    ,checkCompareArgsNumber
     ,checkDevRedirect
-    ,checkCommandResult
+    -- ,checkCommandResult
     ]
 
 runNodeAnalysis f p t = execWriter (doAnalysis (f p) t)
 nodeChecksToTreeCheck checkList =
     runNodeAnalysis
-        (\p t -> (mapM_ ((\ f -> f t) . (\ f -> f p))
-            checkList))
+        (\p t -> mapM_ ((\ f -> f t) . (\ f -> f p))
+            checkList)
 
 checkNotCamelCaseVar :: Parameters -> p -> [TokenComment]
-checkNotCamelCaseVar params t = 
+checkNotCamelCaseVar params _ = 
     execWriter . sequence $ mapMaybe warningFor allVars 
   where
     isLocal = any isLower
@@ -72,7 +73,7 @@ checkNotCamelCaseVar params t =
     toCamelCase' _ = ""
 
     warningForLocals var place = do
-        return $ warn (getId place) 5000 $
+        return $ style (getId place) 5001 $
             "变量 " ++ var ++ " 建议使用驼峰命名, 考虑使用变量名 " ++ toCamelCase var ++ "."
 
     warningFor (var, place) = do
@@ -91,20 +92,43 @@ checkNotCamelCaseVar params t =
     allVars = Map.toList $ Map.difference varMap defaultAssigned
 
 checkSetE params (T_Annotation _ _ (T_Script id _ _)) = 
-    unless (hasSetE params) $ warn id 5001 "建议设置 set -e 选项, 避免后续脚本在错误命令状态下继续执行"
+    unless (hasSetE params) $ warn id 5002 "建议设置 set -e 选项, 避免后续脚本在错误命令状态下继续执行"
 checkSetE _ _ = return ()
 
-checkCompareArgsNumber param t = case t of
-    TC_Binary _ _ _ lhs _ -> case lhs of
-        T_NormalWord _ [T_DoubleQuoted _ [word]] -> check word
-        T_NormalWord _ [word] -> check word
-        _ -> return ()
-    _ -> return ()
+checkCompareArgsNumber params root@(T_Annotation _ _ (T_Script rootScriptID _ _)) = do
+    execWriter $ when (hasPositionalReferenceInRoot && not hasCompareArgsNumberInRoot) $ infoFor rootScriptID
   where
-    infoFor id = info id 5002 "通过 $# 等命令检查传递给脚本的参数数量，确保传入参数数量与预期一致"
-    check t = case t of
-        T_DollarBraced id _ val | getLiteralString val == Just "#" -> do infoFor id
-        _ -> return ()
+    infoFor id = warn id 5000 "检测到读取脚本参数, 建议通过比较 $# 的值检查传递给脚本的参数数量, 确保传入参数数量与预期一致"
+    check' t = case t of
+        T_DollarBraced id _ val -> getLiteralString val == Just "#"
+        _ -> False
+    
+    check t = isDirectChildOfRoot t && case t of
+        TC_Binary _ _ _ lhs _ -> case lhs of
+            T_NormalWord _ [T_DoubleQuoted _ [word]] -> check' word
+            T_NormalWord _ [word] -> check' word
+            _ -> False
+        _ -> False
+    
+    hasCompareArgsNumberInRoot = isNothing $ doAnalysis (guard . not . check) root
+
+    isDirectChildOfRoot child = fromMaybe False $ do
+        function <- find (\case
+            T_Function {} -> True
+            T_Script {} -> True
+            _ -> False) $
+                getPath (parentMap params) child
+        return $ rootScriptID == getId function
+
+    isPositional str = str == "*" || str == "@" || str == "#"
+        || (all isDigit str && str /= "0" && str /= "")
+
+    isPositionalReferenceInRoot x =
+        case x of
+            Reference (_, t, str) -> isPositional str && isDirectChildOfRoot t
+            _ -> False
+    hasPositionalReferenceInRoot = any isPositionalReferenceInRoot $ variableFlow params
+checkCompareArgsNumber _ _ = execWriter $ return ()
 
 checkDevRedirect params redir@(T_Redirecting _ [
     T_FdRedirect _ _ (T_IoFile _ _ file)

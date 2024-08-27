@@ -17,6 +17,7 @@ import Control.Monad
 
 import Test.QuickCheck.All (forAllProperties)
 import Test.QuickCheck.Test (quickCheckWithResult, stdArgs, maxSuccess)
+import GHC.RTS.Flags (TraceFlags(user))
 
 data CommandName = Exactly String | Basename String
     deriving (Eq, Ord)
@@ -26,20 +27,20 @@ data CommandCheck =
 
 commandChecks :: [CommandCheck]
 commandChecks = [
-    checkForceRm,
-    checkUserdel,
-    checkGroupdel,
-    checkKillall,
-    checkKill,
-    checkReboot,
-    checkShutdown,
-    checkInit,
-    checkMvDevNull,
-    checkSSH,
-    checkSu,
-    checkChmod,
-    checkTimeout,
-    checkExit
+    checkForceRm
+    ,checkUserdel
+    ,checkGroupdel
+    ,checkKillall
+    ,checkKill
+    ,checkReboot
+    ,checkShutdown
+    ,checkInit
+    ,checkMvDevNull
+    ,checkSSHHost
+    ,checkSu
+    ,checkChmod
+    -- ,checkTimeout
+    -- checkExit
     ]
 
 buildCommandMap :: [CommandCheck] -> M.Map CommandName (Token -> Analysis)
@@ -86,45 +87,30 @@ verifyNot f s = producesComments (getChecker [f]) s == Just False
 prop_checkCatastrophicRm1 = verify checkForceRm "rm -f $1$2"
 checkForceRm = CommandCheck (Basename "rm") $ \t ->
     when (isForce t) $
-        warn (getId t) 6001 "高危命令检测: 文件或文件夹强制删除."
+        warn (getId t) 5100 "高危命令检测: 检测到文件或文件夹强制删除, 该命令为高危命令请谨慎使用."
   where
-    isForce = any ((`elem` ["f"]) . snd) . getAllFlags
+    isForce = any ((`elem` ["f", "force"]) . snd) . getAllFlags
 
 checkUserdel = CommandCheck (Basename "userdel") $ \t ->
-    warn (getId t) 6002 "高危命令检测: 检测到用户删除命令(userdel)."
+    warn (getId t) 5101 "高危命令检测: 检测到用户删除命令(userdel), 该命令为高危命令请谨慎使用."
 
 checkGroupdel = CommandCheck (Basename "groupdel") $ \t ->
-    warn (getId t) 6003 "高危命令检测: 检测到用户组删除命令(groupdel)."
+    warn (getId t) 5102 "高危命令检测: 检测到用户组删除命令(groupdel), 该命令为高危命令请谨慎使用."
 
 checkKillall = CommandCheck (Basename "killall") $ \t ->
-    warn (getId t) 6004 "高危命令检测: 检测到进程终止命令(killall)."
+    warn (getId t) 5103 "高危命令检测: 检测到进程终止命令(killall), 该命令为高危命令请谨慎使用."
 
 checkKill = CommandCheck (Basename "kill") $ \t ->
-    warn (getId t) 6005 "高危命令检测: 检测到进程终止命令(kill)."
+    warn (getId t) 5104 "高危命令检测: 检测到进程终止命令(kill), 该命令为高危命令请谨慎使用."
 
 checkReboot = CommandCheck (Basename "reboot") $ \t ->
-    warn (getId t) 6006 "高危命令检测: 检测到节点重启命令(reboot)."
+    warn (getId t) 5105 "高危命令检测: 检测到节点重启命令(reboot), 该命令为高危命令请谨慎使用."
 
 checkShutdown = CommandCheck (Basename "shuthown") $ \t ->
-    warn (getId t) 6007 "高危命令检测: 检测到节点关闭命令(shuthown)."
+    warn (getId t) 5106 "高危命令检测: 检测到节点关闭命令(shuthown), 该命令为高危命令请谨慎使用."
 
 checkInit = CommandCheck (Basename "init") $ \t ->
-    warn (getId t) 6008 "高危命令检测: 检测到节点初始化命令(init)."
-
-checkSSH = CommandCheck (Basename "ssh") $ \t ->
-    warn (getId t) 6008 "高危命令检测: 检测到 ssh 命令(ssh)."
-
-checkSu = CommandCheck (Basename "su") $ \t ->
-    warn (getId t) 6008 "高危命令检测: 检测到切换用户命令(su)."
-
-checkChmod = CommandCheck (Basename "chmod") $ \t ->
-    case params t of
-        [T_NormalWord _ [T_Literal id s], _] ->
-            when (s == "777") $
-                warn id 6009 "高危命令检测: 检测到 chmod 777 命令"
-        _ -> return ()
-  where
-    params t = [x | (x,"") <- getAllFlags t]
+    warn (getId t) 5107 "高危命令检测: 检测到节点初始化命令(init), 该命令为高危命令请谨慎使用."
 
 checkMvDevNull = CommandCheck (Basename "mv") checkDestination
   where
@@ -134,7 +120,7 @@ checkMvDevNull = CommandCheck (Basename "mv") checkDestination
                 case find (\(t,x) -> x /= "" && x `isPrefixOf` "target-directory") args of
                     Just (t, _) -> err (getId t) 6009 "高危命令检测: 检测到删除命令(mv .. --target-directory=/dev/null)"
                     _ -> return ()
-            [source, target] -> 
+            [source, target] ->
                 when (isDevNull target) $ err (getId target) 6009 "高危命令检测: 检测到删除命令(mv .. /dev/null)"
             _ -> return ()
         where
@@ -147,10 +133,81 @@ checkMvDevNull = CommandCheck (Basename "mv") checkDestination
             hasTarget =
                 any (\(t,x) -> x /= "" && x `isPrefixOf` "target-directory" && isDevNull t) args
 
-checkTimeout = CommandCheck (Basename "timeout") $ \t ->
-    info (getId t) 5003 "识别到使用了 'timeout' 命令, 建议通过 'timeout' 命令来限制执行时间, 在脚本超时情况下终止脚本执行"
+checkSudo = CommandCheck (Basename "sudo") $ \t -> 
+    warn (getId t) 5107 "高危命令检测: 检测到节点初始化命令(init), 该命令为高危命令请谨慎使用."
 
-checkExit = CommandCheck (Basename "exit") $ \t ->
+checkSSHHost = CommandCheck (Basename "ssh") (f . arguments)
+  where
+    sshString = "46AaCfGgKkMNnqsTtVvXxYy"
+    sshLongOpts = [
+        ("B", True), ("b", True), ("c", True), ("D", True), ("E", True),
+        ("e", True), ("F", True), ("I", True), ("i", True), ("J", True),
+        ("L", True), ("l", True), ("m", True), ("O", True), ("o", True),
+        ("P", True), ("p", True), ("R", True), ("S", True), ("W", True),
+        ("w", True), ("Q", True)
+        ]
+
+    f args =
+        case getOpts (False, True) sshString sshLongOpts args >>= find (\(x,_) -> x == "") of
+            Just (_,(t, _)) -> check t
+            x -> return ()
+    check (T_NormalWord id [T_Literal _ user, T_Literal _ "@", T_Literal _ host]) = 
+        if user == "root" 
+            then err id 5003 $ "检测到 ssh 命令使用 root 用户登陆节点 " ++ host ++ ", 原则上不允许使用 root 用户登陆节点, 请确认权限."
+            else warn id 5003 $ "检测到 ssh 命令使用 " ++ user ++ " 用户登陆节点 " ++ host ++ ", 请确认权限."
+    check (T_NormalWord id [T_Literal _ host]) =
+        warn id 5003 $ "检测到 ssh 命令使用匿名用户登陆节点 " ++ host ++ ", 请确认权限."
+    check x = info (getId x) 2029 "123123"
+
+checkSu = CommandCheck (Basename "su") (f . arguments)
+  where
+    suString = "mplfPhV"
+    suLongOpts = [
+        ("preserve-environment", False), 
+        ("w", True), ("whitelist-environment", True),
+        ("g", True), ("group", True), 
+        ("login", False), ("c", True),  ("command", True), 
+        ("G", True), ("supp-group", True),
+        ("session-command", True), ("s", True), ("shell", True)
+        ]
+    f args = case
+         getOpts (False, True) suString suLongOpts args >>= find (\(x,_) -> x == "") of
+            Just (_,(t, _)) -> check t
+            Nothing -> return ()
+
+    check (T_NormalWord id [T_Literal _ u]) = 
+        if u == "root" 
+            then err id 5003 "检测到切换到 root 用户执行, 原则上不可使用超级管理员用户进行脚本的执行工作, 请确认权限."
+            else warn id 5003 $ "检测到切换到用户 " ++ u ++ ",请确认权限"
+
+    check _ = return ()
+
+
+checkChmod = CommandCheck (Basename "chmod") (f . arguments)
+  where
+    isOption x = "-" `isPrefixOf` concat (oversimplify x)
+    f args = case partition isOption args of
+        (_, mode:_) -> check mode
+        _ -> return ()
+
+    split char str =
+        split' str []
+      where
+        split' (a:rest) element =
+            if a == char
+            then reverse element : split' rest []
+            else split' rest (a:element)
+        split' [] element = [reverse element]
+
+    check mode = case getLiteralString mode of
+        Just m -> when (any (`elem` ["777", "a+rwx", "+rwx"]) $ split ',' m) $
+            warn (getId mode) 5008 $ "检测到 chmod 命令为文件赋予绝对权限 ‘" ++ m ++ "' ,请评估权限是否合理."
+        Nothing -> return ()
+
+checkTimeout = CommandCheck (Basename "timeout") $ \t ->
+    info (getId t) 6001 "识别到使用了 'timeout' 命令, 建议通过 'timeout' 命令来限制执行时间, 在脚本超时情况下终止脚本执行"
+
+checkExit = CommandCheck (Exactly "exit") $ \t ->
     case params t of
         [T_NormalWord _ [T_Literal _ s]] ->
             when (s == "0") $
@@ -158,6 +215,6 @@ checkExit = CommandCheck (Basename "exit") $ \t ->
         _ -> return ()
   where
     params t = [x | (x,"") <- getAllFlags t]
-    
+
 return []
 runTests =  $( [| $(forAllProperties) (quickCheckWithResult (stdArgs { maxSuccess = 1 }) ) |])
