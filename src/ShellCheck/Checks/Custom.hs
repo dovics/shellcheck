@@ -26,6 +26,7 @@ import Control.Monad.State
 import Data.Maybe
 import Data.Char
 import qualified Data.Set as Set
+
 import Data.Foldable
 import Data.List
 import qualified Data.List.NonEmpty as NE
@@ -41,6 +42,7 @@ treeChecks = [
     nodeChecksToTreeCheck nodeChecks
     ,checkNotCamelCaseVar
     ,checkCompareArgsNumber
+    ,checkReadonlyAssignment
     ]
 
 nodeChecks :: [Parameters -> Token -> Writer [TokenComment] ()]
@@ -211,6 +213,27 @@ checkCommandResult params token =
             "126" -> "命令无法执行"
             "127" -> "找不到命令"
             _ -> "未知错误"
+
+checkReadonlyAssignment params t =  
+    execWriter $ evalStateT (mapM analyzeAssignment $ reverse assignments) Set.empty
+  where
+    warnFor (name, token) =
+        warn (getId token) 2034 $ "assigned to readonly variable" ++ name ++ "."
+
+    isReadOnly cmd = maybe False (\case
+        "declare" -> any (\t -> concat (oversimplify t) == "-r") $ arguments cmd
+        "readonly" -> True
+        _ -> False
+        ) $ getCommandName cmd
+
+    flow = variableFlow params
+    assignments = [(name, token) | Assignment (token, _, name, _) <- flow, isVariableName name]
+    
+    analyzeAssignment (name, token) = do
+        isRead <- gets $ Set.member name
+        when (isReadOnly token) $ modify $ Set.insert name
+        if isRead then return () else warnFor (name, token)
+                       
 
 prop_CustomTestsWork = True
 
