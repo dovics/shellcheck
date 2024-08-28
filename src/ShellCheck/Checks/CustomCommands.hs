@@ -6,6 +6,7 @@
 module ShellCheck.Checks.CustomCommands (checker, ShellCheck.Checks.CustomCommands.runTests) where
 
 import Control.Monad
+import Data.Aeson.Encoding (value)
 import Data.List
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe, isJust)
@@ -16,7 +17,7 @@ import ShellCheck.AnalyzerLib
 import ShellCheck.Interface
 import Test.QuickCheck.All (forAllProperties)
 import Test.QuickCheck.Test (maxSuccess, quickCheckWithResult, stdArgs)
-import Text.Parsec (token)
+import Text.Parsec (parse, token)
 
 data CommandName = Exactly String | Basename String
   deriving (Eq, Ord)
@@ -41,6 +42,7 @@ commandChecks =
     checkServiceStop,
     checkSSHHost,
     checkSu,
+    checkSudo,
     checkChmod
     -- ,checkTimeout
     -- checkExit
@@ -58,14 +60,14 @@ checkCommand map t@(T_SimpleCommand id cmdPrefix (cmd : rest)) = sequence_ $ do
   name <- getLiteralString cmd
   return $
     if
-        | '/' `elem` name ->
+      | '/' `elem` name ->
           M.findWithDefault nullCheck (Basename $ basename name) map t
-        | name == "builtin",
-          (h : _) <- rest ->
+      | name == "builtin",
+        (h : _) <- rest ->
           let t' = T_SimpleCommand id cmdPrefix rest
               selectedBuiltin = onlyLiteralString h
            in M.findWithDefault nullCheck (Exactly selectedBuiltin) map t'
-        | otherwise -> do
+      | otherwise -> do
           M.findWithDefault nullCheck (Exactly name) map t
           M.findWithDefault nullCheck (Basename name) map t
   where
@@ -187,10 +189,10 @@ checkSystemctlStop = CommandCheck (Basename "systemctl") (f . arguments)
         case getLiteralString command of
           Just str
             | str == "stop" || str == "kill" ->
-              warn (getId command) 5113 $ "高危命令检测: 检测到停止系统服务 " ++ concat (oversimplify unit) ++ " (systemctl " ++ str ++ "), 该命令为高危命令请谨慎使用"
+                warn (getId command) 5113 $ "高危命令检测: 检测到停止系统服务 " ++ concat (oversimplify unit) ++ " (systemctl " ++ str ++ "), 该命令为高危命令请谨慎使用"
           Just str
             | str == "restart" || str == "try-restart" ->
-              warn (getId command) 5113 $ "高危命令检测: 检测到重启系统服务 " ++ concat (oversimplify unit) ++ " (systemctl " ++ str ++ "), 该命令为高危命令请谨慎使用"
+                warn (getId command) 5113 $ "高危命令检测: 检测到重启系统服务 " ++ concat (oversimplify unit) ++ " (systemctl " ++ str ++ "), 该命令为高危命令请谨慎使用"
           _ -> return ()
       _ -> return ()
 
@@ -271,11 +273,27 @@ checkChmod = CommandCheck (Basename "chmod") (f . arguments)
     check mode = case getLiteralString mode of
       Just m ->
         when (any (`elem` ["777", "a+rwx", "+rwx"]) $ split ',' m) $
-          warn (getId mode) 5005 $ "检测到 chmod 命令为文件赋予绝对权限 ‘" ++ m ++ "' ,请评估权限是否合理."
+          warn (getId mode) 5005 $
+            "检测到 chmod 命令为文件赋予绝对权限 ‘" ++ m ++ "' ,请评估权限是否合理."
       Nothing -> return ()
 
-checkSudo = CommandCheck (Basename "sudo") $ \t ->
-  warn (getId t) 5008 "sudo"
+checkSudo = CommandCheck (Basename "sudo") f
+  where
+    f t =
+      warn (getId t) 5008 $
+        "检测到使用 sudo 执行命令, 用户为 " ++ fromMaybe "默认" getSudoUser ++ " 命令为 " ++ fromMaybe "" getSudoComand ++ ", 请评估权限是否合理."
+      where
+        args = arguments t
+        getOpts = getBsdOpts "vAknSbEHPa:g:h:p:u:c:T:r:" args
+        getSudoUser = do
+          opts <- getOpts
+          (option, value) <- lookup "u" opts
+          getLiteralString value
+        getSudoComand = do
+          opts <- getOpts
+          let cmd = filter (\(option, _) -> option == "") opts
+              cmd' = map (\(_, (_, value)) -> fromMaybe "" $ getLiteralString value) cmd
+          Just $ unwords cmd'
 
 -- checkTimeout = CommandCheck (Basename "timeout") $ \t ->
 --     info (getId t) 6001 "识别到使用了 'timeout' 命令, 建议通过 'timeout' 命令来限制执行时间, 在脚本超时情况下终止脚本执行"
