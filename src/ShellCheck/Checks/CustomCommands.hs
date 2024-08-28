@@ -37,6 +37,8 @@ commandChecks =
     checkMvDevNull,
     checkHalt,
     checkPoweroff,
+    checkSystemctlStop,
+    checkServiceStop,
     checkSSHHost,
     checkSu,
     checkChmod
@@ -175,6 +177,37 @@ checkMkfs str = CommandCheck (Basename str) $ \cmd ->
       _ | str == "mkfs.xfs" || str == "mkfs.msdos" || str == "mkfs.vfat" -> getBsdOpts "b:m:d:fi:Kl:L:n:Np:qr:s:V" tokens
       _ | "mkfs.ext" `isPrefixOf` str -> getGnuOpts "c:l:b:C:i:I:J:G:N:d:m:o:g:L:M:O:r:E:t:T:U:e:z:jnqvDFKSV" tokens
       _ -> Nothing
+
+checkSystemctlStop = CommandCheck (Basename "systemctl") (f . arguments)
+  where
+    isOption x = "-" `isPrefixOf` concat (oversimplify x)
+
+    f args = case partition isOption args of
+      (_, command : unit : _) ->
+        case getLiteralString command of
+          Just str
+            | str == "stop" || str == "kill" ->
+              warn (getId command) 5113 $ "高危命令检测: 检测到停止系统服务 " ++ concat (oversimplify unit) ++ " (systemctl " ++ str ++ "), 该命令为高危命令请谨慎使用"
+          Just str
+            | str == "restart" || str == "try-restart" ->
+              warn (getId command) 5113 $ "高危命令检测: 检测到重启系统服务 " ++ concat (oversimplify unit) ++ " (systemctl " ++ str ++ "), 该命令为高危命令请谨慎使用"
+          _ -> return ()
+      _ -> return ()
+
+checkServiceStop = CommandCheck (Basename "service") (f . arguments)
+  where
+    f (service : cmd : _) = case getLiteralString cmd of
+      Just "stop" ->
+        warn (getId cmd) 5114 $
+          "高危命令检测: 检测到停止系统服务 " ++ concat (oversimplify service) ++ " (service .. stop), 该命令为高危命令请谨慎使用"
+      Just "restart" ->
+        warn (getId cmd) 5114 $
+          "高危命令检测: 检测到重启系统服务 " ++ concat (oversimplify service) ++ " (service .. restart), 该命令为高危命令请谨慎使用"
+      Just "--full-restart" ->
+        warn (getId cmd) 5114 $
+          "高危命令检测: 检测到重启系统服务 " ++ concat (oversimplify service) ++ " (service .. --full-restart), 该命令为高危命令请谨慎使用"
+      _ -> return ()
+    f _ = return ()
 
 checkSSHHost = CommandCheck (Basename "ssh") (f . arguments)
   where
