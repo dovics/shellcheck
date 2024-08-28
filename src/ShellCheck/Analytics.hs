@@ -2954,11 +2954,11 @@ checkSuspiciousIFS params (T_Assignment _ _ "IFS" [] value) =
         case value of
             "\\n" -> suggest n
             "\\t" -> suggest t
-            x | '\\' `elem` x -> suggest2 "a literal backslash"
-            x | 'n' `elem` x -> suggest2 "the literal letter 'n'"
-            x | 't' `elem` x -> suggest2 "the literal letter 't'"
+            x | '\\' `elem` x -> suggest2 "符号反斜杠"
+            x | 'n' `elem` x -> suggest2 "字母 'n'"
+            x | 't' `elem` x -> suggest2 "字母 't'"
             _ -> return ()
-    suggest r = warn (getId value) 2141 $ getMessage 2141 [r, ""]
+    suggest r = warn (getId value) 2141 $ getMessage 2141 [r]
     suggest2 desc = warn (getId value) 2141 $ getMessage 2141 ["", desc]
 checkSuspiciousIFS _ _ = return ()
 

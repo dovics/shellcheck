@@ -18,6 +18,8 @@ import Control.Monad
 import Test.QuickCheck.All (forAllProperties)
 import Test.QuickCheck.Test (quickCheckWithResult, stdArgs, maxSuccess)
 import GHC.RTS.Flags (TraceFlags(user))
+import Text.Parsec (token)
+import Data.Maybe (isJust, fromMaybe)
 
 data CommandName = Exactly String | Basename String
     deriving (Eq, Ord)
@@ -36,12 +38,14 @@ commandChecks = [
     ,checkShutdown
     ,checkInit
     ,checkMvDevNull
+    ,checkHalt
+    ,checkPoweroff 
     ,checkSSHHost
     ,checkSu
     ,checkChmod
     -- ,checkTimeout
     -- checkExit
-    ]
+    ] ++ map checkMkfs mkfsCommandList
 
 buildCommandMap :: [CommandCheck] -> M.Map CommandName (Token -> Analysis)
 buildCommandMap = foldl' addCheck M.empty
@@ -118,10 +122,10 @@ checkMvDevNull = CommandCheck (Basename "mv") checkDestination
         case params token of
             [single] -> do
                 case find (\(t,x) -> x /= "" && x `isPrefixOf` "target-directory") args of
-                    Just (t, _) -> err (getId t) 6009 "高危命令检测: 检测到删除命令(mv .. --target-directory=/dev/null)"
+                    Just (t, _) -> err (getId t) 5108 "高危命令检测: 检测到删除命令(mv .. --target-directory=/dev/null)"
                     _ -> return ()
             [source, target] ->
-                when (isDevNull target) $ err (getId target) 6009 "高危命令检测: 检测到删除命令(mv .. /dev/null)"
+                when (isDevNull target) $ err (getId target) 5108 "高危命令检测: 检测到删除命令(mv .. /dev/null)"
             _ -> return ()
         where
             args = getAllFlags token
@@ -133,22 +137,48 @@ checkMvDevNull = CommandCheck (Basename "mv") checkDestination
             hasTarget =
                 any (\(t,x) -> x /= "" && x `isPrefixOf` "target-directory" && isDevNull t) args
 
-checkSudo = CommandCheck (Basename "sudo") $ \t -> 
-    warn (getId t) 5107 "高危命令检测: 检测到节点初始化命令(init), 该命令为高危命令请谨慎使用."
+checkHalt = CommandCheck (Basename "halt") $ \t -> 
+    warn (getId t) 5110 "高危命令检测: 检测到系统关闭命令(halt), 该命令为高危命令请谨慎使用."
+
+checkPoweroff = CommandCheck (Basename "poweroff") $ \t -> 
+    warn (getId t) 5111 "高危命令检测: 检测到系统关闭命令(poweroff), 该命令为高危命令请谨慎使用."
+
+mkfsCommandList=[
+    "mkfs"
+    ,"mkfs.bfs"
+    ,"mkfs.cramfs"
+    ,"mkfs.ext2"
+    ,"mkfs.ext3"
+    ,"mkfs.ext4"
+    ,"mkfs.fat"
+    ,"mkfs.minix"
+    ,"mkfs.msdos"
+    ,"mkfs.ntfs"
+    ,"mkfs.vfat"
+    ,"mkfs.xfs"
+    ]
+
+checkMkfs str = CommandCheck (Basename str) $ \cmd -> 
+    warn (getId cmd) 5112 $ "高危命令检测: 检测到 " ++ fromMaybe "" (getDeviceName cmd ) ++ " 设备格式化命令(" ++ str ++ "), 该命令为高危命令请谨慎使用."
+  where
+    getDeviceName cmd = do 
+        opts <- parseOpts $ arguments cmd
+        (_,(dev, _)) <- find (null . fst) opts
+        getLiteralString dev
+
+    parseOpts tokens = case str of 
+        "mkfs.bfs" ->  getBsdOpts "clhVvN:V:F:" tokens
+        "mkfs.cramfs" -> getBsdOpts "vEb:e:N:i:n:pszl" tokens
+        "mkfs.fat" -> getBsdOpts "aAb:cCD:f:F:g:h:i:Il:m:M:n:r:R:s:S:v" tokens
+        _ | str == "mkfs.xfs" || str == "mkfs.msdos" || str == "mkfs.vfat" -> getBsdOpts "b:m:d:fi:Kl:L:n:Np:qr:s:V" tokens
+        _ | "mkfs.ext" `isPrefixOf` str -> getGnuOpts "c:l:b:C:i:I:J:G:N:d:m:o:g:L:M:O:r:E:t:T:U:e:z:jnqvDFKSV" tokens
+        _ -> Nothing
 
 checkSSHHost = CommandCheck (Basename "ssh") (f . arguments)
   where
-    sshString = "46AaCfGgKkMNnqsTtVvXxYy"
-    sshLongOpts = [
-        ("B", True), ("b", True), ("c", True), ("D", True), ("E", True),
-        ("e", True), ("F", True), ("I", True), ("i", True), ("J", True),
-        ("L", True), ("l", True), ("m", True), ("O", True), ("o", True),
-        ("P", True), ("p", True), ("R", True), ("S", True), ("W", True),
-        ("w", True), ("Q", True)
-        ]
-
+    flagsForSSH = "46AaCfGgKkMNnqsTtVvXxYyB:b:c:D:E:e:F:I:i:J:L:l:m:O:o:P:p:R:S:W:w:"
     f args =
-        case getOpts (False, True) sshString sshLongOpts args >>= find (\(x,_) -> x == "") of
+        case getGnuOpts flagsForSSH args >>= find (\(x,_) -> x == "") of
             Just (_,(t, _)) -> check t
             x -> return ()
     check (T_NormalWord id [T_Literal _ user, T_Literal _ "@", T_Literal _ host]) = 
@@ -177,11 +207,10 @@ checkSu = CommandCheck (Basename "su") (f . arguments)
 
     check (T_NormalWord id [T_Literal _ u]) = 
         if u == "root" 
-            then err id 5003 "检测到切换到 root 用户执行, 原则上不可使用超级管理员用户进行脚本的执行工作, 请确认权限."
-            else warn id 5003 $ "检测到切换到用户 " ++ u ++ ",请确认权限"
+            then err id 5004 "检测到切换到 root 用户执行, 原则上不可使用超级管理员用户进行脚本的执行工作, 请确认权限."
+            else warn id 5004 $ "检测到切换到用户 " ++ u ++ ",请确认权限"
 
     check _ = return ()
-
 
 checkChmod = CommandCheck (Basename "chmod") (f . arguments)
   where
@@ -201,20 +230,23 @@ checkChmod = CommandCheck (Basename "chmod") (f . arguments)
 
     check mode = case getLiteralString mode of
         Just m -> when (any (`elem` ["777", "a+rwx", "+rwx"]) $ split ',' m) $
-            warn (getId mode) 5008 $ "检测到 chmod 命令为文件赋予绝对权限 ‘" ++ m ++ "' ,请评估权限是否合理."
+            warn (getId mode) 5005 $ "检测到 chmod 命令为文件赋予绝对权限 ‘" ++ m ++ "' ,请评估权限是否合理."
         Nothing -> return ()
 
-checkTimeout = CommandCheck (Basename "timeout") $ \t ->
-    info (getId t) 6001 "识别到使用了 'timeout' 命令, 建议通过 'timeout' 命令来限制执行时间, 在脚本超时情况下终止脚本执行"
+checkSudo = CommandCheck (Basename "sudo") $ \t -> 
+    warn (getId t) 5008 "sudo"
 
-checkExit = CommandCheck (Exactly "exit") $ \t ->
-    case params t of
-        [T_NormalWord _ [T_Literal _ s]] ->
-            when (s == "0") $
-                warn (getId t) 5005 "检测到退出命令(exit), 退出码为0, 脚本遇到错误或异常情况主动退出, 应使用非 0 的退出状态码, 可根据脚本的具体执行的操作、功能或步骤定义相应的错误类型"
-        _ -> return ()
-  where
-    params t = [x | (x,"") <- getAllFlags t]
+-- checkTimeout = CommandCheck (Basename "timeout") $ \t ->
+--     info (getId t) 6001 "识别到使用了 'timeout' 命令, 建议通过 'timeout' 命令来限制执行时间, 在脚本超时情况下终止脚本执行"
+
+-- checkExit = CommandCheck (Exactly "exit") $ \t ->
+--     case params t of
+--         [T_NormalWord _ [T_Literal _ s]] ->
+--             when (s == "0") $
+--                 warn (getId t) 6005 "检测到退出命令(exit), 退出码为0, 脚本遇到错误或异常情况主动退出, 应使用非 0 的退出状态码, 可根据脚本的具体执行的操作、功能或步骤定义相应的错误类型"
+--         _ -> return ()
+--   where
+--     params t = [x | (x,"") <- getAllFlags t]
 
 return []
 runTests =  $( [| $(forAllProperties) (quickCheckWithResult (stdArgs { maxSuccess = 1 }) ) |])
