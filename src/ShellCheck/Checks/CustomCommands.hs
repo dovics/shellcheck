@@ -40,6 +40,7 @@ commandChecks =
     checkPoweroff,
     checkSystemctlStop,
     checkServiceStop,
+    checkDd,
     checkSSHHost,
     checkSu,
     checkSudo,
@@ -274,7 +275,7 @@ checkChmod = CommandCheck (Basename "chmod") (f . arguments)
       Just m ->
         when (any (`elem` ["777", "a+rwx", "+rwx"]) $ split ',' m) $
           warn (getId mode) 5005 $
-            "检测到 chmod 命令为文件赋予绝对权限 ‘" ++ m ++ "' ,请评估权限是否合理."
+            "检测到 chmod 命令为文件赋予绝对权限 '" ++ m ++ "' ,请评估权限是否合理."
       Nothing -> return ()
 
 checkSudo = CommandCheck (Basename "sudo") f
@@ -294,6 +295,17 @@ checkSudo = CommandCheck (Basename "sudo") f
           let cmd = filter (\(option, _) -> option == "") opts
               cmd' = map (\(_, (_, value)) -> fromMaybe "" $ getLiteralString value) cmd
           Just $ unwords cmd'
+
+checkDd = CommandCheck (Basename "dd") f
+  where
+    isOuputFileOpt = isPrefixOf "of="
+    getOutputFile str
+      | "of=/dev/sd" `isPrefixOf` str = Just $ drop (length "of=") str
+      | otherwise = Nothing
+
+    f t = case find isOuputFileOpt (map (fromMaybe "" . getLiteralString) $ arguments t) >>= getOutputFile of
+      Just x -> err (getId t) 5115 $ "高危命令检测: 检测到磁盘写入命令 dd, 可能导致磁盘 " ++ x ++ " 损坏, 请谨慎操作"
+      Nothing -> warn (getId t) 5115 "高危命令检测: 检测到磁盘写入命令 dd, 请谨慎操作"
 
 -- checkTimeout = CommandCheck (Basename "timeout") $ \t ->
 --     info (getId t) 6001 "识别到使用了 'timeout' 命令, 建议通过 'timeout' 命令来限制执行时间, 在脚本超时情况下终止脚本执行"
